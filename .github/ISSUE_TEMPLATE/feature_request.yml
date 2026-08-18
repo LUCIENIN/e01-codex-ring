@@ -1,0 +1,36 @@
+name: Feature request
+description: Propose a bounded addition to the renderer, encoder or transport
+title: "[feature] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user-visible problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+    validations:
+      required: true
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Layer
+      options:
+        - Snapshot provider
+        - Card renderer
+        - Media encoder
+        - BLE transport
+        - Documentation or tests
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence or acceptance test
+    validations:
+      required: true

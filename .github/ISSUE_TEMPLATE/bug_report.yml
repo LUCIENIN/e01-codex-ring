@@ -1,0 +1,42 @@
+name: Device or protocol bug
+description: Report a reproducible failure without private device identifiers
+title: "[bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include MAC addresses, serial numbers, QR URLs, Codex sessions, APKs or firmware files.
+  - type: input
+    id: stage
+    attributes:
+      label: Failing stage
+      placeholder: scan, bind, badge_info, rcsp_auth, update_start, update_data
+    validations:
+      required: true
+  - type: textarea
+    id: identity
+    attributes:
+      label: Anonymized device identity
+      description: Protocol, firmware, platform and model fields only.
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Exact result
+      description: Error enum, command and reason code. State whether the screen visibly changed.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: macOS version, Swift version, Mac architecture
+    validations:
+      required: true
