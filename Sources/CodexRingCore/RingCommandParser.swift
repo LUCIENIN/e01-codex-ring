@@ -6,6 +6,8 @@ public enum RingCommandKind: Equatable, Sendable {
     case scan
     case bind
     case probe
+    case cleanup
+    case formatMedia
     case display
     case displayWatch
 }
@@ -72,6 +74,10 @@ public enum RingCommandParser {
             kind = .bind
         case "probe":
             kind = .probe
+        case "cleanup":
+            kind = .cleanup
+        case "format-media":
+            kind = .formatMedia
         case "display":
             kind = .display
         case "display-watch":

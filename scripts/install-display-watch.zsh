@@ -4,8 +4,12 @@ set -euo pipefail
 repo_root=${0:A:h:h}
 label="com.lucien.e01-codex-ring"
 agent_path="${HOME}/Library/LaunchAgents/${label}.plist"
-runtime_dir="${repo_root}/.runtime"
-binary_path="${repo_root}/.build/release/codex-ring"
+runtime_dir="${HOME}/.local/state/e01-codex-ring"
+install_root="${HOME}/.local/lib/e01-codex-ring"
+binary_path="${install_root}/codex-ring"
+resource_name="CodexRing_CodexRingCore.resources"
+build_binary="${repo_root}/.build/release/codex-ring"
+build_resources="${repo_root}/.build/release/${resource_name}"
 sessions_path="${CODEX_SESSIONS_DIR:-${HOME}/.codex/sessions}"
 known_device_path="${HOME}/.codex/e01-known-device-id"
 
@@ -15,9 +19,13 @@ if [[ "${1:-}" == "--reset-device" && -f "${known_device_path}" ]]; then
     print "Backed up the previous device identifier to ${backup_path}"
 fi
 
-mkdir -p "${runtime_dir}" "${HOME}/Library/LaunchAgents"
+mkdir -p "${runtime_dir}" "${install_root}" "${HOME}/Library/LaunchAgents"
 cd "${repo_root}"
 swift build -c release
+/usr/bin/install -m 0755 "${build_binary}" "${binary_path}"
+if [[ -d "${build_resources}" ]]; then
+    /usr/bin/ditto "${build_resources}" "${install_root}/${resource_name}"
+fi
 
 launchctl bootout "gui/${UID}/${label}" 2>/dev/null || true
 
@@ -41,7 +49,7 @@ done
 /usr/libexec/PlistBuddy -c "Add :ProgramArguments:7 string 30" "${agent_path}"
 /usr/libexec/PlistBuddy -c "Add :ProgramArguments:8 string --timeout" "${agent_path}"
 /usr/libexec/PlistBuddy -c "Add :ProgramArguments:9 string 30" "${agent_path}"
-/usr/libexec/PlistBuddy -c "Add :WorkingDirectory string ${repo_root}" "${agent_path}"
+/usr/libexec/PlistBuddy -c "Add :WorkingDirectory string ${install_root}" "${agent_path}"
 /usr/libexec/PlistBuddy -c "Add :RunAtLoad bool true" "${agent_path}"
 /usr/libexec/PlistBuddy -c "Add :KeepAlive bool true" "${agent_path}"
 /usr/libexec/PlistBuddy -c "Add :ProcessType string Background" "${agent_path}"
@@ -55,5 +63,5 @@ launchctl enable "gui/${UID}/${label}"
 launchctl kickstart -k "gui/${UID}/${label}"
 
 print "Installed ${label}"
-print "Turn off phone Bluetooth, then power-cycle the E01 once."
+print "The watcher will reconnect automatically while the E01 is available."
 print "Logs: ${runtime_dir}/display-watch.log"

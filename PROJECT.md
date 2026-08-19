@@ -8,13 +8,13 @@
 
 | Area | Status | Acceptance evidence |
 |---|---|---|
-| Circular Codex allowance renderer | Done | PNG generated; renderer tests pass |
+| Circular Codex + Kimi allowance renderer | Done | Live Kimi weekly/5-hour read, PNG generated, renderer tests pass |
 | Read-only BLE discovery | Done | `FD00` advertisement is required |
 | Normal-service bind | Done | checksummed `0x61`, state `0` |
 | Badge/firmware identity parsing | Done | parser tests and bind output fields |
 | Media/protocol encoders | Done at unit level | deterministic frame/CRC tests |
-| Live custom-content write | Protocol-complete on one E01 | 229,798 bytes transferred; tail and offset-0 verification completed |
-| Continuous quota sync | Code-complete, hardware recheck pending | main-limit filtering, change-only writes, LaunchAgent installer and reconnect tests |
+| Live custom-content write | Verified on one E01 | transfer completed and user visually confirmed the custom card |
+| Continuous quota sync | Recovery verified; power-cycle acceptance pending | persistent LaunchAgent, composite Codex/Kimi state, sanitized Kimi cache, bounded retry, 15-second connection recovery and three-failure rescan |
 | Firmware replacement | Identification started | live target reports the AC697 SDK family; exact chip, board, LCD init, stock image and rollback path remain unknown |
 
 ## Milestones
@@ -24,7 +24,8 @@
 - [x] Route `display` through the RCSP media path accepted by the owner-controlled device.
 - [x] Complete the device-requested tail and offset-0 verification reads.
 - [x] Record only anonymized device identity and protocol trace.
-- [ ] Reconfirm the latest generated card visually after each release candidate.
+- [x] Confirm one generated Codex card visually on the round screen.
+- [ ] Reconfirm automatic refresh after a physical power cycle on the latest release candidate.
 
 ### v0.3 — Reusable display SDK
 

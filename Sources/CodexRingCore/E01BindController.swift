@@ -11,6 +11,7 @@ public struct E01BindResult: Equatable, Sendable {
     public let platform: UInt8?
     public let modelNumber: UInt16?
     public let rcspTargetInfoHex: String?
+    public let committedMediaFileName: String?
 
     public init(
         deviceName: String,
@@ -21,7 +22,8 @@ public struct E01BindResult: Equatable, Sendable {
         firmwareVersion: String? = nil,
         platform: UInt8? = nil,
         modelNumber: UInt16? = nil,
-        rcspTargetInfoHex: String? = nil
+        rcspTargetInfoHex: String? = nil,
+        committedMediaFileName: String? = nil
     ) {
         self.deviceName = deviceName
         self.responseLength = responseLength
@@ -32,6 +34,7 @@ public struct E01BindResult: Equatable, Sendable {
         self.platform = platform
         self.modelNumber = modelNumber
         self.rcspTargetInfoHex = rcspTargetInfoHex
+        self.committedMediaFileName = committedMediaFileName
     }
 }
 
@@ -101,6 +104,7 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
     private var packet: [UInt8] = []
     private var continuation: CheckedContinuation<E01BindResult, Error>?
     private var timeoutWorkItem: DispatchWorkItem?
+    private var stageTimeoutWorkItem: DispatchWorkItem?
     private var writeWasAcknowledged = false
     private var primaryResponseAssembler = E01NormalDataResponseAssembler()
     private var auxiliaryResponseAssembler = E01NormalDataResponseAssembler()
@@ -123,7 +127,11 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
     private var rcspWriteQueue: [RCSPWriteJob] = []
     private var activeRCSPWrite: RCSPWriteJob?
     private var transferPacketSize = 0
+    private var transferRenameTime = 0
+    private var committedMediaFileName: String?
     private var lastReadRequest: E01RCSPTransferProtocol.ReadRequest?
+    private var cleanupFileName: String?
+    private var shouldFormatMedia = false
     private var transferProgressStage = "waiting_for_transfer_requests"
     private var normalWriteQueue: [NormalWriteJob] = []
     private var activeNormalWrite: NormalWriteJob?
@@ -163,12 +171,39 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
         )
     }
 
+    public func cleanupGeneratedMedia(
+        fileName: String = "codex_push.avi",
+        request: E01BindRequest,
+        timeout: TimeInterval
+    ) async throws -> E01BindResult {
+        try await start(
+            request: request,
+            timeout: timeout,
+            shouldProbeRCSP: true,
+            cleanupFileName: fileName
+        )
+    }
+
+    public func formatMediaStorage(
+        request: E01BindRequest,
+        timeout: TimeInterval
+    ) async throws -> E01BindResult {
+        try await start(
+            request: request,
+            timeout: timeout,
+            shouldProbeRCSP: true,
+            shouldFormatMedia: true
+        )
+    }
+
     private func start(
         request: E01BindRequest,
         timeout: TimeInterval,
         shouldProbeRCSP: Bool,
         mediaBytes: [UInt8]? = nil,
-        mediaFileName: String = "CODEX.AVI"
+        mediaFileName: String = "CODEX.AVI",
+        cleanupFileName: String? = nil,
+        shouldFormatMedia: Bool = false
     ) async throws -> E01BindResult {
         guard (5...180).contains(timeout) else {
             throw E01BindError.invalidTimeout
@@ -204,7 +239,11 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                 self.rcspWriteQueue = []
                 self.activeRCSPWrite = nil
                 self.transferPacketSize = 0
+                self.transferRenameTime = 0
+                self.committedMediaFileName = nil
                 self.lastReadRequest = nil
+                self.cleanupFileName = cleanupFileName
+                self.shouldFormatMedia = shouldFormatMedia
                 self.transferProgressStage = "waiting_for_transfer_requests"
                 self.normalWriteQueue = []
                 self.activeNormalWrite = nil
@@ -213,17 +252,15 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                 self.updateSerialNumber = 0
                 self.updateHeaderIndex = 0
                 self.usedKnownDevice = false
+                self.stageTimeoutWorkItem?.cancel()
+                self.stageTimeoutWorkItem = nil
                 self.normalCharacteristicsDiscovered = false
                 self.rcspCharacteristicsDiscovered = false
                 self.stage = "waiting_for_bluetooth"
                 self.centralManager = CBCentralManager(delegate: self, queue: self.queue)
+                self.scheduleStageTimeout(for: self.stage)
                 let timeoutWorkItem = DispatchWorkItem { [weak self] in
                     guard let self else { return }
-                    if self.usedKnownDevice,
-                       (self.stage == "connecting" || self.stage == "discovering_service") {
-                        try? self.knownDeviceStore.clear()
-                        self.traceTransfer("known_device_cleared_after_timeout")
-                    }
                     let error: E01BindError
                     if self.stage.contains("rcsp_auth") {
                         error = .noRCSPAuthResponse(packetHeaders: self.notificationPacketHeaders)
@@ -257,6 +294,7 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn:
+            cancelStageTimeout()
             if let identifier = knownDeviceStore.load(),
                let peripheral = central.retrievePeripherals(withIdentifiers: [identifier]).first {
                 usedKnownDevice = true
@@ -270,6 +308,7 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                 withServices: Self.advertisedDataServiceAliases(),
                 options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
             )
+            scheduleStageTimeout(for: stage)
         case .unknown, .resetting:
             break
         default:
@@ -299,6 +338,7 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
     }
 
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        cancelStageTimeout()
         traceTransfer("device_connected")
         stage = "discovering_service"
         var services = Self.regularDataServiceAliases()
@@ -323,6 +363,30 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
         self.peripheral = peripheral
         peripheral.delegate = self
         central.connect(peripheral)
+        scheduleStageTimeout(for: stage)
+    }
+
+    private func scheduleStageTimeout(for expectedStage: String) {
+        stageTimeoutWorkItem?.cancel()
+        guard let timeout = E01KnownDeviceRecovery.stageTimeout(for: expectedStage) else {
+            stageTimeoutWorkItem = nil
+            return
+        }
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.continuation != nil,
+                  self.stage == expectedStage
+            else { return }
+            self.traceTransfer("stage_timeout stage=\(expectedStage)")
+            self.finish(with: .failure(.timedOut(stage: expectedStage)))
+        }
+        stageTimeoutWorkItem = workItem
+        queue.asyncAfter(deadline: .now() + timeout, execute: workItem)
+    }
+
+    private func cancelStageTimeout() {
+        stageTimeoutWorkItem?.cancel()
+        stageTimeoutWorkItem = nil
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
@@ -517,6 +581,12 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
             stage = "waiting_for_bind_response"
         case "writing_badge_info_request":
             stage = "waiting_for_badge_info_response"
+        case "writing_badge_media_type":
+            // The vendor SDK exposes 0xDC on its local command event stream and
+            // starts TransferTask from that event. The badge itself does not echo
+            // 0xDC on this firmware, so advance after CoreBluetooth acknowledges
+            // the complete write.
+            startRCSPAuthentication()
         case "writing_rcsp_probe":
             stage = "waiting_for_rcsp_probe"
         case "writing_rcsp_auth":
@@ -558,7 +628,7 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                         // Media files use the device's proven RCSP file-transfer path.
                         // The normal-service C0 dial updater rejects this E01 firmware
                         // before it requests any payload bytes.
-                        sendRCSPProbe()
+                        startPostAuthenticationOperation()
                     case .failed:
                         finish(with: .failure(.rcspAuthFailed))
                     case .ignored:
@@ -637,6 +707,27 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
             return
         }
 
+        // ZRun selects the vendor BADGE media route (0xDC, type 12) and waits for
+        // the matching acknowledgement before starting its RCSP TransferTask.
+        // Without this handshake the file is stored successfully but the factory
+        // E-Badge animation remains selected.
+        if stage == "waiting_for_badge_media_type_response",
+           bytes.count >= 4,
+           bytes[3] == 0xDC {
+            startRCSPAuthentication()
+            return
+        }
+
+        if stage.contains("rcsp_auth"), bytes.count >= 8, bytes[3] == 0xFF {
+            let acknowledgedCommand = bytes[6]
+            let accepted = bytes[7] == 0
+            traceTransfer(String(format: "normal_ack command=%02X accepted=%d", acknowledgedCommand, accepted ? 1 : 0))
+            if acknowledgedCommand == 0xDC, !accepted {
+                finish(with: .failure(.transferFailed(reason: bytes[7])))
+            }
+            return
+        }
+
         // A peripheral notification can arrive before CoreBluetooth delivers the
         // with-response write callback. Accept the response in either ordering.
         if (stage == "writing_bind_request" || stage == "waiting_for_bind_response"),
@@ -674,12 +765,18 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                 return
             }
             badgeResult = result
-            switch E01DisplayPreparation.nextStepAfterBadgeInfo() {
-            case .authenticateRCSP:
-                startRCSPAuthentication()
-            }
+            sendBadgeMediaTypeSelection()
             return
         }
+    }
+
+    private func sendBadgeMediaTypeSelection() {
+        let request = E01NormalDataFrame.packet(
+            command: 0xDC,
+            payload: [0x0C],
+            serialNumber: 2
+        )
+        writeNormal(request, stage: "writing_badge_media_type")
     }
 
     private func startVideoDialUpdate(headerIndex: Int) {
@@ -824,6 +921,29 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
         }
     }
 
+    private func startPostAuthenticationOperation() {
+        switch E01DisplayPreparation.nextStepAfterAuthentication(
+            hasMedia: mediaBytes != nil,
+            cleanupFileName: cleanupFileName,
+            shouldFormatMedia: shouldFormatMedia
+        ) {
+        case .inspectTargetInfo:
+            sendRCSPProbe()
+        case .queryStorage:
+            sendCommand(
+                opcode: 0x07,
+                parameter: E01RCSPTransferProtocol.getStorageParameter(),
+                stage: shouldFormatMedia ? "waiting_for_storage_to_format" : "waiting_for_storage"
+            )
+        case let .deleteFile(fileName):
+            sendCommand(
+                opcode: 0x23,
+                parameter: E01RCSPTransferProtocol.deleteByNameParameter(fileName),
+                stage: "waiting_for_generated_media_delete"
+            )
+        }
+    }
+
     private func handleRCSPPacket(_ packet: E01RCSPFrame.Packet) {
         if packet.isCommand {
             handleRCSPCommand(packet)
@@ -836,6 +956,22 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
         }
         switch packet.opcode {
         case 0x03:
+            if let cleanupFileName {
+                sendCommand(
+                    opcode: 0x23,
+                    parameter: E01RCSPTransferProtocol.deleteByNameParameter(cleanupFileName),
+                    stage: "waiting_for_generated_media_delete"
+                )
+                return
+            }
+            if shouldFormatMedia {
+                sendCommand(
+                    opcode: 0x07,
+                    parameter: E01RCSPTransferProtocol.getStorageParameter(),
+                    stage: "waiting_for_storage_to_format"
+                )
+                return
+            }
             guard mediaBytes != nil else {
                 guard let badgeResult else { return }
                 let inspectedResult = E01BindResult(
@@ -857,7 +993,12 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                 parameter: E01RCSPTransferProtocol.getStorageParameter(),
                 stage: "waiting_for_storage"
             )
+        case 0x23:
+            guard cleanupFileName != nil, let badgeResult else { return }
+            self.cleanupFileName = nil
+            finish(with: .success(badgeResult))
         case 0x07:
+            traceTransfer("storage_info " + packet.parameter.map { String(format: "%02X", $0) }.joined())
             guard let handler = E01RCSPTransferProtocol.sdCardOneHandler(
                 fromGetSysInfoParameter: packet.parameter
             ) else {
@@ -865,6 +1006,14 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                 return
             }
             storageHandler = handler
+            if shouldFormatMedia {
+                sendCommand(
+                    opcode: 0x22,
+                    parameter: E01RCSPTransferProtocol.formatDeviceParameter(deviceHandler: handler),
+                    stage: "waiting_for_media_format"
+                )
+                return
+            }
             sendCommand(
                 opcode: 0x21,
                 parameter: [0x00],
@@ -880,6 +1029,14 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                 parameter: E01RCSPTransferProtocol.deviceExtendParameter(deviceHandler: storageHandler),
                 stage: "waiting_for_transfer_capability"
             )
+        case 0x22:
+            let reason = packet.parameter.first ?? 0
+            guard reason == 0, let badgeResult else {
+                finish(with: .failure(.transferFailed(reason: reason)))
+                return
+            }
+            shouldFormatMedia = false
+            finish(with: .success(badgeResult))
         case 0x27:
             firmwareUsesTransferCRC = packet.parameter.last == 1
             guard let mediaBytes else { return }
@@ -950,7 +1107,15 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                 }
             }
         case 0x20:
-            let nameParameter = Array(mediaFileName.utf8) + [0x00, 0x00]
+            committedMediaFileName = E01RCSPTransferProtocol.transferFileName(
+                mediaFileName,
+                renameTime: transferRenameTime
+            )
+            let nameParameter = E01RCSPTransferProtocol.transferNameParameter(
+                mediaFileName,
+                renameTime: transferRenameTime
+            )
+            traceTransfer("transfer_name retry=\(transferRenameTime)")
             do {
                 try writeRCSP(
                     E01RCSPFrame.response(
@@ -961,6 +1126,7 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                     ),
                     stage: "waiting_for_transfer_finish"
                 )
+                transferRenameTime += 1
             } catch {
                 finish(with: .failure(.writeFailed))
             }
@@ -979,12 +1145,28 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                 finish(with: .failure(.writeFailed))
                 return
             }
-            guard reason == 0, let badgeResult else {
+            guard reason == 0 else {
                 finish(with: .failure(.transferFailed(reason: reason)))
                 return
             }
+            guard let badgeResult, let committedMediaFileName else {
+                finish(with: .failure(.invalidTransferRequest))
+                return
+            }
+            let displayResult = E01BindResult(
+                deviceName: badgeResult.deviceName,
+                responseLength: badgeResult.responseLength,
+                displaySize: badgeResult.displaySize,
+                memoryBytes: badgeResult.memoryBytes,
+                protocolVersion: badgeResult.protocolVersion,
+                firmwareVersion: badgeResult.firmwareVersion,
+                platform: badgeResult.platform,
+                modelNumber: badgeResult.modelNumber,
+                rcspTargetInfoHex: badgeResult.rcspTargetInfoHex,
+                committedMediaFileName: committedMediaFileName
+            )
             queue.asyncAfter(deadline: .now() + .milliseconds(150)) { [weak self] in
-                self?.finish(with: .success(badgeResult))
+                self?.finish(with: .success(displayResult))
             }
         case 0x1E:
             finish(with: .failure(.transferFailed(reason: packet.parameter.first ?? 0xFF)))
@@ -1068,6 +1250,7 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
         centralManager?.stopScan()
         timeoutWorkItem?.cancel()
         timeoutWorkItem = nil
+        cancelStageTimeout()
         if let peripheral {
             centralManager?.cancelPeripheralConnection(peripheral)
         }

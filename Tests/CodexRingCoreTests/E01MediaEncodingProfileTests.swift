@@ -2,22 +2,23 @@ import XCTest
 @testable import CodexRingCore
 
 final class E01MediaEncodingProfileTests: XCTestCase {
-    func testMatchesZRunBadgeMPEG4EncodingProfile() {
+    func testUsesAtMostThreeRepeatedFramesForLowSpaceAtomicUpdates() throws {
         let arguments = E01MediaEncodingProfile.ffmpegArguments(
             imagePath: "/tmp/card.png",
             moviePath: "/tmp/card.avi"
         )
 
         XCTAssertTrue(arguments.contains("-nostdin"))
-        guard let pixelFormatIndex = arguments.firstIndex(of: "-pix_fmt") else {
-            return XCTFail("E01 media encoding must explicitly select a compatible pixel format")
-        }
-        XCTAssertEqual(arguments[pixelFormatIndex + 1], "yuv420p")
-        XCTAssertEqual(value(after: "-framerate", in: arguments), "12")
-        XCTAssertEqual(value(after: "-c:v", in: arguments), "mpeg4")
-        XCTAssertEqual(value(after: "-r", in: arguments), "12")
-        XCTAssertEqual(value(after: "-q:v", in: arguments), "2")
+        XCTAssertEqual(value(after: "-pix_fmt", in: arguments), "yuvj420p")
+        XCTAssertEqual(value(after: "-c:v", in: arguments), "mjpeg")
+        XCTAssertEqual(value(after: "-q:v", in: arguments), "5")
         XCTAssertEqual(value(after: "-t", in: arguments), "1")
+
+        let inputRate = try XCTUnwrap(Int(try XCTUnwrap(value(after: "-framerate", in: arguments))))
+        let outputRate = try XCTUnwrap(Int(try XCTUnwrap(value(after: "-r", in: arguments))))
+        let duration = try XCTUnwrap(Int(try XCTUnwrap(value(after: "-t", in: arguments))))
+        XCTAssertEqual(inputRate, outputRate)
+        XCTAssertLessThanOrEqual(outputRate * duration, 3)
     }
 
     private func value(after option: String, in arguments: [String]) -> String? {

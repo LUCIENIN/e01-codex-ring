@@ -2,6 +2,39 @@ import XCTest
 @testable import CodexRingCore
 
 final class E01RCSPTransferProtocolTests: XCTestCase {
+    func testEncodesShortAndLongTransferNamesLikeJieliSDK() {
+        XCTAssertEqual(
+            E01RCSPTransferProtocol.transferNameParameter("badge.avi"),
+            Array("badge.avi".utf8) + [0x00, 0x00]
+        )
+        XCTAssertEqual(
+            E01RCSPTransferProtocol.transferNameParameter("badge.avi", renameTime: 1),
+            Array("badge001.avi".utf8) + [0x00, 0x00]
+        )
+        XCTAssertEqual(
+            E01RCSPTransferProtocol.transferFileName("badge.avi", renameTime: 1),
+            "badge001.avi"
+        )
+        XCTAssertEqual(
+            E01RCSPTransferProtocol.transferNameParameter("codex_push.avi"),
+            [0x5C, 0x55] + "codex_push.avi".utf16.flatMap {
+                [UInt8(truncatingIfNeeded: $0), UInt8(truncatingIfNeeded: $0 >> 8)]
+            } + [0x00, 0x00]
+        )
+    }
+    func testDeleteByNameParameterMatchesOfficialRCSPCommand() {
+        XCTAssertEqual(
+            E01RCSPTransferProtocol.deleteByNameParameter("codex_push.avi"),
+            [0x00] + Array("codex_push.avi".utf8)
+        )
+    }
+
+    func testFormatDeviceParameterUsesBigEndianStorageHandle() {
+        XCTAssertEqual(
+            E01RCSPTransferProtocol.formatDeviceParameter(deviceHandler: 0x12345678),
+            [0x12, 0x34, 0x56, 0x78]
+        )
+    }
     func testCRC16MatchesXmodemKnownVector() {
         XCTAssertEqual(E01RCSPTransferProtocol.crc16(Array("123456789".utf8)), 0x31C3)
     }

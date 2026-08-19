@@ -1,8 +1,8 @@
 # E01 Codex Ring
 
-一个面向 macOS 的实验性 Swift 项目：读取本机 Codex 会话中最近一次额度快照，生成圆形仪表盘，并研究如何通过 BLE 把自定义内容写入 E01/ZRun 圆形电子胸牌。
+一个面向 macOS 的实验性 Swift 项目：读取本机 Codex 与 Kimi Code 额度，生成圆形仪表盘，并通过 BLE 把自定义内容写入 E01/ZRun 圆形电子胸牌。
 
-> 当前结论：预览、BLE 扫描、绑定、设备信息解析和 RCSP 媒体传输已经在一台 368×368 E01 上完成实机验证；屏幕肉眼显示仍未通过验收。`display` 传输 MPEG-4/YUV420P AVI，只有设备完成尾包与头部复核后才输出 `display_transfer_complete`，但该结果不能替代屏幕确认。仓库暂不刷写固件。
+> 当前结论：预览、BLE 扫描、绑定、设备信息解析、RCSP 媒体传输和自定义画面显示已经在一台 368×368 E01 上完成实机验证。`display` 传输 MJPEG/YUVJ420P AVI，只有设备明确完成传输后才输出 `display_transfer_complete`；持续同步已经加入后台启动、短超时重试、旧连接恢复和状态落盘，但每个固件仍需做一次断电重连验收。仓库暂不刷写固件。
 
 ![Status](https://img.shields.io/badge/status-hardware--investigation-orange)
 ![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-blue)
@@ -12,12 +12,14 @@
 ## 已验证的部分
 
 - 只读取近期 Codex JSONL 中的 `token_count.rate_limits`，忽略提示词、消息、账号标识和 Cookie。
+- 从 Kimi Code 官方 `https://api.kimi.com/coding/v1/usages` 只读获取每周额度和 5 小时滚动额度；API Key 只在内存中的请求头使用，不写入图片、日志、缓存或仓库。
 - 生成 64–2048 像素的圆形 PNG；默认 320×320，设备路径使用 368×368。
 - 只读扫描 E01 的 `FD00` 数据服务。
 - 在 `FD01/FD02/FD03` 白名单内执行绑定，并校验 `0x61` 响应。
 - 解析屏幕尺寸、存储容量、协议版本、固件版本、平台和型号字段。
 - 实现普通数据帧、视频表盘 `C0/C1/C2/C3/C5`、RCSP 帧和大文件传输的解析/编码测试。
-- 在一台自有 E01 上通过 RCSP 完成 368×368 AVI 传输；设备完成尾包和 offset 0 头部复核，但屏幕显示尚未确认。
+- 在一台自有 E01 上通过 RCSP 完成 368×368 AVI 传输，并由用户肉眼确认自定义画面已经显示。
+- 后台连接卡住时会在 15 秒结束本轮；前两次保留已知设备，连续三次失败后自动切换为重新扫描。
 
 ## 验证边界
 
@@ -56,16 +58,20 @@ swift run codex-ring display-watch --interval 30 --timeout 30
 
 `display_transfer_complete` 只有在设备明确返回成功结果后才会输出。看到扫描或绑定成功，不代表屏幕内容已经更新。
 
-`display-watch` 会持续读取最新的本地额度快照。只有设备写入成功后，它才记住该百分比；扫描或传输失败会在下一轮重试，相同百分比不会重复写入。E01 必须处于 Mac 可发现的 BLE 状态，手机端 ZRun 占用连接时无法刷新。
+`display-watch` 在正常空闲时按不短于 30 秒的周期读取 Codex，并向 Kimi Code 官方接口请求最新额度；BLE 重试不会把 Kimi 请求加速到 30 秒以内。只有设备写入成功后，它才把三项百分比的组合签名、时间和设备中的活动文件名保存到 `~/.codex/e01-display-sync-state.json`；任一百分比变化都会触发下一次写屏。Kimi 最近一次成功结果会脱敏缓存到 `~/.codex/e01-kimi-usage-cache.json`，临时断网或服务重启时可以继续显示旧值，超过 10 分钟会标为 `STALE DATA`。扫描或传输失败会按 5、15、30、60 秒的上限退避重试；长时间不变时每 5 分钟重新确认一次，避免设备重启后保留旧画面。E01 必须开机并处于 Mac 可连接的 BLE 状态，手机端 ZRun 占用连接时无法刷新。
 
 ## 新徽章首次同步
 
-新用户需要一台 macOS 14+ 的 Mac、Swift 6+、Homebrew 版 FFmpeg，以及已经产生本地额度记录的 Codex Desktop/CLI。程序读取的是本机 JSONL 中主额度 `limit_id=codex`，不读取聊天正文、Cookie 或云端账号密码。
+新用户需要一台 macOS 14+ 的 Mac、Swift 6+、Homebrew 版 FFmpeg，以及已经产生本地额度记录的 Codex Desktop/CLI。Kimi 显示是可选的：安装 Kimi Code CLI 并执行一次 `kimi login` 后，程序会读取 `~/.kimi-code/config.toml` 中的 Kimi 类型凭据，但只允许把它发送给官方 `api.kimi.com/coding/v1` 地址。没有登录 Kimi 时，Codex 同步仍可独立工作。
 
 ```bash
 brew install ffmpeg
 git clone https://github.com/LUCIENIN/e01-codex-ring.git
 cd e01-codex-ring
+
+# 可选：需要显示 Kimi 时，先安装 Kimi Code CLI，再登录一次
+kimi login
+
 chmod +x scripts/install-display-watch.zsh
 ./scripts/install-display-watch.zsh
 ```
@@ -75,11 +81,11 @@ chmod +x scripts/install-display-watch.zsh
 1. 关闭手机蓝牙，避免 ZRun 或手机系统先占用徽章连接。
 2. 给 E01 断电再上电一次，让 Mac 捕获它的短时 BLE 广播。
 3. 等待 `display_sync_complete`；只有这条日志和屏幕肉眼变化同时出现，才算同步成功。
-4. 查看日志：`tail -f .runtime/display-watch.error.log .runtime/display-watch.log`。
+4. 查看日志：`tail -f ~/.local/state/e01-codex-ring/display-watch.error.log ~/.local/state/e01-codex-ring/display-watch.log`。
 
-首次完成 GATT 服务发现后，程序会在 `~/.codex/e01-known-device-id` 保存本机 CoreBluetooth UUID。更换另一块徽章时执行 `./scripts/install-display-watch.zsh --reset-device`，旧 UUID 会先备份，再重新扫描新设备。
+首次完成 GATT 服务发现后，程序会在 `~/.codex/e01-known-device-id` 保存本机 CoreBluetooth UUID。此后 Mac 登录、后台服务重启或徽章再次广播时都会自动尝试连接，不需要重复运行安装命令。连续三次短连接失败后，程序会暂时放弃旧 UUID 并自动扫描；更换另一块徽章时执行 `./scripts/install-display-watch.zsh --reset-device`，旧 UUID 会先备份，再重新扫描新设备。
 
-这不是 HDMI 或 USB 外接屏。显示链路是“本地 Codex 额度 → 368×368 图片 → MPEG-4 AVI → BLE/RCSP 推送”，因此更新粒度是百分比变化后的同步，不是逐帧镜像。当前只在一台 368×368 E01 上验证过协议传输；实际显示和自动重连仍需按设备固件逐台验收。
+这不是 HDMI 或 USB 外接屏。显示链路是“Codex/Kimi 额度 → 368×368 图片 → MJPEG AVI → BLE/RCSP 推送”，因此更新粒度是下一次 30 秒检查发现百分比变化后的同步，不是秒级推送，也不是逐帧镜像。当前只在一台 368×368 E01 上验证过协议和实际显示；自动重连仍需按设备固件逐台做一次断电验收。设备完全不广播时，任何 Mac 程序都无法主动连接，此时只需让徽章重新开机，不需要重装或重新执行同步命令。
 
 ## 写入自己的程序/内容
 
@@ -103,6 +109,8 @@ chmod +x scripts/install-display-watch.zsh
 ## 参考来源
 
 - [Jieli-Tech/WeChat-Mini-Program-OTA](https://github.com/Jieli-Tech/WeChat-Mini-Program-OTA)（RCSP 认证资源和公开 SDK 语义）
+- [Kimi Code Membership](https://www.kimi.com/code/docs/en/kimi-code/membership.html)（共享周额度与 5 小时滚动额度说明）
+- [MoonshotAI/kimi-code managed usage](https://github.com/MoonshotAI/kimi-code/blob/fa9865f2ee653133295992489554bb2db05a9db5/packages/oauth/src/managed-usage.ts)（官方额度接口、响应字段和超时行为）
 - 本仓库的 E01 普通数据/表盘协议代码来自对自有设备和自有 App 流量的 clean-room 观察；未复制厂商 App 源码。
 
 ## 参与贡献
