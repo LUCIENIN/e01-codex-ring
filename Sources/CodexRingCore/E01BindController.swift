@@ -229,9 +229,6 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                     } else if self.stage == "writing_badge_info_request"
                         || self.stage == "waiting_for_badge_info_response" {
                         error = .noBadgeInfoResponse(packetHeaders: self.notificationPacketHeaders)
-                    } else if self.stage == "writing_badge_mode_request"
-                        || self.stage == "waiting_for_badge_mode_response" {
-                        error = .timedOut(stage: self.stage)
                     } else if self.stage.contains("transfer") || self.stage.contains("update")
                         || self.stage.hasPrefix("transferring_") {
                         error = .timedOut(stage: self.stage)
@@ -517,8 +514,6 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
             stage = "waiting_for_bind_response"
         case "writing_badge_info_request":
             stage = "waiting_for_badge_info_response"
-        case "writing_badge_mode_request":
-            stage = "waiting_for_badge_mode_response"
         case "writing_rcsp_probe":
             stage = "waiting_for_rcsp_probe"
         case "writing_rcsp_auth":
@@ -676,27 +671,10 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                 return
             }
             badgeResult = result
-            guard mediaBytes != nil else {
+            switch E01DisplayPreparation.nextStepAfterBadgeInfo() {
+            case .authenticateRCSP:
                 startRCSPAuthentication()
-                return
             }
-            // ZRun selects the electronic-badge file category before it starts the
-            // Jieli transfer task. The device acknowledges the same 0xDC command,
-            // and only then does the app begin RCSP authentication/file transfer.
-            let badgeModeRequest = E01NormalDataFrame.packet(
-                command: 0xDC,
-                payload: [0x0C],
-                serialNumber: 2
-            )
-            writeNormal(badgeModeRequest, stage: "writing_badge_mode_request")
-            return
-        }
-
-        if (stage == "writing_badge_mode_request" || stage == "waiting_for_badge_mode_response"),
-           bytes.count >= 4,
-           bytes[3] == 0xDC {
-            traceTransfer("badge_mode_acknowledged type=12")
-            startRCSPAuthentication()
             return
         }
     }
