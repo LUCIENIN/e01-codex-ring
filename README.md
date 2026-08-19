@@ -2,9 +2,9 @@
 
 一个面向 macOS 的实验性 Swift 项目：读取本机 Codex 会话中最近一次额度快照，生成圆形仪表盘，并研究如何通过 BLE 把自定义内容写入 E01/ZRun 圆形电子胸牌。
 
-> 当前结论：预览、BLE 扫描、绑定、设备信息解析和媒体写入已经在一台 368×368 E01 上完成实机验证。`display` 通过 RCSP 大文件通道传输 MJPEG AVI；只有设备完成尾包与头部复核后，程序才输出 `display_transfer_complete`。仓库不提供或刷写固件。
+> 当前结论：预览、BLE 扫描、绑定、设备信息解析和 RCSP 媒体传输已经在一台 368×368 E01 上完成实机验证；屏幕肉眼显示仍未通过验收。`display` 传输 MPEG-4/YUV420P AVI，只有设备完成尾包与头部复核后才输出 `display_transfer_complete`，但该结果不能替代屏幕确认。仓库暂不刷写固件。
 
-![Status](https://img.shields.io/badge/status-hardware--verified-brightgreen)
+![Status](https://img.shields.io/badge/status-hardware--investigation-orange)
 ![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-blue)
 ![Swift](https://img.shields.io/badge/Swift-6.0%2B-F05138)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -17,7 +17,7 @@
 - 在 `FD01/FD02/FD03` 白名单内执行绑定，并校验 `0x61` 响应。
 - 解析屏幕尺寸、存储容量、协议版本、固件版本、平台和型号字段。
 - 实现普通数据帧、视频表盘 `C0/C1/C2/C3/C5`、RCSP 帧和大文件传输的解析/编码测试。
-- 在一台自有 E01 上通过 RCSP 完成 229,798 字节的 368×368 MJPEG AVI 传输；设备完成尾包和 offset 0 头部复核。
+- 在一台自有 E01 上通过 RCSP 完成 368×368 AVI 传输；设备完成尾包和 offset 0 头部复核，但屏幕显示尚未确认。
 
 ## 验证边界
 
@@ -79,7 +79,7 @@ chmod +x scripts/install-display-watch.zsh
 
 首次完成 GATT 服务发现后，程序会在 `~/.codex/e01-known-device-id` 保存本机 CoreBluetooth UUID。更换另一块徽章时执行 `./scripts/install-display-watch.zsh --reset-device`，旧 UUID 会先备份，再重新扫描新设备。
 
-这不是 HDMI 或 USB 外接屏。显示链路是“本地 Codex 额度 → 368×368 图片 → MJPEG AVI → BLE/RCSP 推送”，因此更新粒度是百分比变化后的同步，不是逐帧镜像。当前只在一台 368×368 E01 上验证过媒体写入；自动重连仍需按设备固件逐台验收。
+这不是 HDMI 或 USB 外接屏。显示链路是“本地 Codex 额度 → 368×368 图片 → MPEG-4 AVI → BLE/RCSP 推送”，因此更新粒度是百分比变化后的同步，不是逐帧镜像。当前只在一台 368×368 E01 上验证过协议传输；实际显示和自动重连仍需按设备固件逐台验收。
 
 ## 写入自己的程序/内容
 

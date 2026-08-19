@@ -87,6 +87,19 @@ struct CodexRingApp {
                         + "protocol=\(protocolVersion) firmware=\(firmwareVersion) "
                         + "platform=\(platform) model=\(modelNumber)"
                 )
+            case .probe:
+                let result = try await E01BindController().probeRCSP(
+                    request: makeBindRequest(),
+                    timeout: command.options.scanTimeout
+                )
+                print(
+                    "probe_response device=\(result.deviceName) "
+                        + "protocol=\(result.protocolVersion ?? "unknown") "
+                        + "firmware=\(result.firmwareVersion ?? "unknown") "
+                        + "platform=\(result.platform.map(String.init) ?? "unknown") "
+                        + "model=\(result.modelNumber.map(String.init) ?? "unknown") "
+                        + "rcsp_target=\(result.rcspTargetInfoHex ?? "unknown")"
+                )
             case .display:
                 let (result, mediaCount) = try await displayOnce(options: command.options)
                 print(

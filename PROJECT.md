@@ -15,7 +15,7 @@
 | Media/protocol encoders | Done at unit level | deterministic frame/CRC tests |
 | Live custom-content write | Protocol-complete on one E01 | 229,798 bytes transferred; tail and offset-0 verification completed |
 | Continuous quota sync | Code-complete, hardware recheck pending | main-limit filtering, change-only writes, LaunchAgent installer and reconnect tests |
-| Firmware replacement | Not started | no exact official image or rollback proof |
+| Firmware replacement | Identification started | live target reports the AC697 SDK family; exact chip, board, LCD init, stock image and rollback path remain unknown |
 
 ## Milestones
 
@@ -38,6 +38,18 @@
 - Explicit device selection when multiple badges advertise.
 - Recovery instructions and compatibility matrix.
 - No firmware path unless exact image provenance and rollback are verified.
+
+### Backup track — Custom firmware
+
+- [x] Add a read-only `probe` command for reproducible device inspection.
+- [x] Record the tested unit's sanitized identity: protocol `2.9`, firmware `11.1.0.3`, model field `1613`, and AC697 SDK-family marker.
+- [ ] Identify the exact AC697 chip marking, external flash part and LCD controller from board-level evidence.
+- [ ] Acquire and hash a matching stock firmware image without publishing device credentials.
+- [ ] Prove a wired or bootloader-level recovery path on sacrificial hardware.
+- [ ] Build a minimal screen and BLE proof of concept against the exact board configuration.
+- [ ] Permit OTA only after the stock image and recovery procedure have both been restored successfully.
+
+The SDK-family marker is not a flash target. AC697 variants, board pin maps, flash layouts and LCD initialization tables are not interchangeable.
 
 ## Definition of done
 

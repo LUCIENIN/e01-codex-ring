@@ -10,6 +10,7 @@ public struct E01BindResult: Equatable, Sendable {
     public let firmwareVersion: String?
     public let platform: UInt8?
     public let modelNumber: UInt16?
+    public let rcspTargetInfoHex: String?
 
     public init(
         deviceName: String,
@@ -19,7 +20,8 @@ public struct E01BindResult: Equatable, Sendable {
         protocolVersion: String? = nil,
         firmwareVersion: String? = nil,
         platform: UInt8? = nil,
-        modelNumber: UInt16? = nil
+        modelNumber: UInt16? = nil,
+        rcspTargetInfoHex: String? = nil
     ) {
         self.deviceName = deviceName
         self.responseLength = responseLength
@@ -29,6 +31,7 @@ public struct E01BindResult: Equatable, Sendable {
         self.firmwareVersion = firmwareVersion
         self.platform = platform
         self.modelNumber = modelNumber
+        self.rcspTargetInfoHex = rcspTargetInfoHex
     }
 }
 
@@ -835,7 +838,18 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
         case 0x03:
             guard mediaBytes != nil else {
                 guard let badgeResult else { return }
-                finish(with: .success(badgeResult))
+                let inspectedResult = E01BindResult(
+                    deviceName: badgeResult.deviceName,
+                    responseLength: badgeResult.responseLength,
+                    displaySize: badgeResult.displaySize,
+                    memoryBytes: badgeResult.memoryBytes,
+                    protocolVersion: badgeResult.protocolVersion,
+                    firmwareVersion: badgeResult.firmwareVersion,
+                    platform: badgeResult.platform,
+                    modelNumber: badgeResult.modelNumber,
+                    rcspTargetInfoHex: packet.parameter.map { String(format: "%02X", $0) }.joined()
+                )
+                finish(with: .success(inspectedResult))
                 return
             }
             sendCommand(
