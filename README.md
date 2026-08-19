@@ -2,9 +2,9 @@
 
 一个面向 macOS 的实验性 Swift 项目：读取本机 Codex 会话中最近一次额度快照，生成圆形仪表盘，并研究如何通过 BLE 把自定义内容写入 E01/ZRun 圆形电子胸牌。
 
-> 当前结论：预览、BLE 扫描、绑定、设备信息解析和协议单元测试已经可复现；真实设备上的媒体写入仍会被一台 E01 以 `C5 reason 5` 拒绝。因此，本仓库没有把“连接成功”写成“写屏成功”，也不提供或刷写固件。
+> 当前结论：预览、BLE 扫描、绑定、设备信息解析和媒体写入已经在一台 368×368 E01 上完成实机验证。`display` 通过 RCSP 大文件通道传输 MJPEG AVI；只有设备完成尾包与头部复核后，程序才输出 `display_transfer_complete`。仓库不提供或刷写固件。
 
-![Status](https://img.shields.io/badge/status-experimental-orange)
+![Status](https://img.shields.io/badge/status-hardware--verified-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-blue)
 ![Swift](https://img.shields.io/badge/Swift-6.0%2B-F05138)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -17,11 +17,12 @@
 - 在 `FD01/FD02/FD03` 白名单内执行绑定，并校验 `0x61` 响应。
 - 解析屏幕尺寸、存储容量、协议版本、固件版本、平台和型号字段。
 - 实现普通数据帧、视频表盘 `C0/C1/C2/C3/C5`、RCSP 帧和大文件传输的解析/编码测试。
+- 在一台自有 E01 上通过 RCSP 完成 229,798 字节的 368×368 MJPEG AVI 传输；设备完成尾包和 offset 0 头部复核。
 
-## 尚未验证的部分
+## 验证边界
 
-- `display` 在当前实机上尚未得到 `C5 reason 0`；最后观察到的是 `C5 reason 5`。
-- 不知道 `reason 5` 是媒体槽位、固件能力、文件封装还是设备状态导致。
+- 实机结论只覆盖当前这一台 E01 及其已观察到的协议组合，不代表所有同外壳设备兼容。
+- 普通数据服务的 `C0` 表盘更新在该固件上会在请求媒体分片前被拒绝，因此 `display` 使用已经实机成功的 RCSP 文件传输路径。
 - 没有取得与该设备精确版本匹配、可回滚的官方固件，所以没有执行 OTA。
 - 其他 E01 固件和相似外壳设备的兼容性未知。
 
@@ -46,7 +47,7 @@ swift run codex-ring scan --timeout 10
 # 执行普通数据服务绑定
 swift run codex-ring bind --timeout 20
 
-# 实验性写屏；失败会以非零状态退出
+# 写屏；失败会以非零状态退出
 swift run codex-ring display --timeout 30
 ```
 

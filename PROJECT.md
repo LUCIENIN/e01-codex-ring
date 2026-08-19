@@ -13,17 +13,17 @@
 | Normal-service bind | Done | checksummed `0x61`, state `0` |
 | Badge/firmware identity parsing | Done | parser tests and bind output fields |
 | Media/protocol encoders | Done at unit level | deterministic frame/CRC tests |
-| Live custom-content write | Blocked | device returns `C5 reason 5` |
+| Live custom-content write | Protocol-complete on one E01 | 229,798 bytes transferred; tail and offset-0 verification completed |
 | Firmware replacement | Not started | no exact official image or rollback proof |
 
 ## Milestones
 
 ### v0.2 — First verified live display
 
-- Reduce `C5 reason 5` to one confirmed cause.
-- Obtain `C5 reason 0` on an owner-controlled device.
-- Verify the visible content matches the generated PNG.
-- Record only anonymized device identity and protocol trace.
+- [x] Route `display` through the RCSP media path accepted by the owner-controlled device.
+- [x] Complete the device-requested tail and offset-0 verification reads.
+- [x] Record only anonymized device identity and protocol trace.
+- [ ] Reconfirm the latest generated card visually after each release candidate.
 
 ### v0.3 — Reusable display SDK
 

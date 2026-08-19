@@ -522,11 +522,10 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                     case let .send(bytes):
                         try writeRCSP(bytes, stage: "writing_rcsp_auth")
                     case .authenticated:
-                        if mediaBytes != nil {
-                            startVideoDialUpdate(headerIndex: 0)
-                        } else {
-                            sendRCSPProbe()
-                        }
+                        // Media files use the device's proven RCSP file-transfer path.
+                        // The normal-service C0 dial updater rejects this E01 firmware
+                        // before it requests any payload bytes.
+                        sendRCSPProbe()
                     case .failed:
                         finish(with: .failure(.rcspAuthFailed))
                     case .ignored:

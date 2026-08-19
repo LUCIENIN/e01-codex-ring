@@ -25,19 +25,20 @@ Frame construction, checksums and parsers are covered by unit tests in `Tests/Co
 
 ## RCSP flow
 
-The repository contains parsers and encoders for the observed Jieli RCSP framing and large-file request/response exchange. Authentication uses Jieli's publicly released Apache-2.0 `jl_auth_2.0.0.js`; see `THIRD_PARTY_NOTICES.md`.
+The `display` command uses the observed Jieli RCSP framing and large-file request/response exchange. After authentication it negotiates storage and transfer capability, answers device read requests in negotiated-MTU fragments with per-fragment CRC16, and waits for the device's explicit finish command. Authentication uses Jieli's publicly released Apache-2.0 `jl_auth_2.0.0.js`; see `THIRD_PARTY_NOTICES.md`.
 
-## Known failure
+## Live-device result
 
 On the currently tested owner-controlled E01:
 
-1. advertisement and connection can be intermittent;
-2. normal bind can succeed;
-3. badge identity can be read;
-4. a video-dial start attempt is rejected with `C5 reason 5`;
-5. trying several candidate slot values did not turn it into success.
+1. normal bind and badge identity parsing succeed;
+2. RCSP authentication and storage negotiation succeed;
+3. the device requests media in 3920-byte ranges;
+4. the host splits each range by the negotiated 490-byte MTU and adds per-fragment CRC16;
+5. the device requests the tail and then offset 0 for header verification;
+6. the latest verified run completed 229,798 media bytes and emitted `display_transfer_complete`.
 
-The meaning of reason `5` is not confirmed. Do not label it as a specific firmware error without a primary source or a controlled experiment.
+The normal-service `C0` video-dial path remains implemented for protocol study, but this firmware rejects its start header before issuing `C1`. The CLI does not use that failed path for `display`.
 
 ## Not in scope
 
