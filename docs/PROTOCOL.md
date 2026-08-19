@@ -36,9 +36,20 @@ On the currently tested owner-controlled E01:
 3. the device requests media in 3920-byte ranges;
 4. the host splits each range by the negotiated 490-byte MTU and adds per-fragment CRC16;
 5. the device requests the tail and then offset 0 for header verification;
-6. the latest verified run completed 229,798 media bytes and emitted `display_transfer_complete`.
+6. an earlier visually confirmed run completed 229,798 media bytes and emitted `display_transfer_complete`;
+7. the latest background-watcher run completed a 44,492-byte three-frame AVI, removed the previous generated file and then reported the same quota state as unchanged.
 
-The normal-service `C0` video-dial path remains implemented for protocol study, but this firmware rejects its start header before issuing `C1`. The CLI does not use that failed path for `display`.
+The latest watcher evidence was:
+
+```text
+display_sync_complete device=E01 codex_remaining=24 kimi_weekly_remaining=91 kimi_five_hour_remaining=82 file=CODEXB003.AVI transferred_media_bytes=44492
+display_sync_cleanup_complete device=E01 file=CODEXA003.AVI
+display_sync_unchanged codex_remaining=24 kimi_weekly_remaining=91 kimi_five_hour_remaining=82
+```
+
+This proves transfer completion, old-media cleanup and an unchanged follow-up cycle. The latest redesigned card still needs a separate visual readback; protocol completion alone is not documented as visual acceptance.
+
+The normal-service `C0` video-dial path remains implemented for protocol study, but this firmware rejects its start header before issuing `C1`. An older attempt ended with `C5 reason 5`; that reason's general meaning has not been decoded. This is a historical result for an unused alternate path, not the current `display` blocker: the CLI now uses the verified RCSP media-transfer path.
 
 ## Not in scope
 
