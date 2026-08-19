@@ -8,22 +8,24 @@
 
 | Area | Status | Acceptance evidence |
 |---|---|---|
-| Circular Codex allowance renderer | Done | PNG generated; renderer tests pass |
+| Circular Codex + Kimi allowance renderer | Done | Live Kimi weekly/5-hour read, PNG generated, renderer tests pass |
 | Read-only BLE discovery | Done | `FD00` advertisement is required |
 | Normal-service bind | Done | checksummed `0x61`, state `0` |
 | Badge/firmware identity parsing | Done | parser tests and bind output fields |
 | Media/protocol encoders | Done at unit level | deterministic frame/CRC tests |
-| Live custom-content write | Blocked | device returns `C5 reason 5` |
-| Firmware replacement | Not started | no exact official image or rollback proof |
+| Live custom-content write | Verified on one E01 | transfer completed and user visually confirmed the custom card |
+| Continuous quota sync | Recovery verified; power-cycle acceptance pending | persistent LaunchAgent, composite Codex/Kimi state, sanitized Kimi cache, bounded retry, 15-second connection recovery and three-failure rescan |
+| Firmware replacement | Identification started | live target reports the AC697 SDK family; exact chip, board, LCD init, stock image and rollback path remain unknown |
 
 ## Milestones
 
 ### v0.2 — First verified live display
 
-- Reduce `C5 reason 5` to one confirmed cause.
-- Obtain `C5 reason 0` on an owner-controlled device.
-- Verify the visible content matches the generated PNG.
-- Record only anonymized device identity and protocol trace.
+- [x] Route `display` through the RCSP media path accepted by the owner-controlled device.
+- [x] Complete the device-requested tail and offset-0 verification reads.
+- [x] Record only anonymized device identity and protocol trace.
+- [x] Confirm one generated Codex card visually on the round screen.
+- [ ] Reconfirm automatic refresh after a physical power cycle on the latest release candidate.
 
 ### v0.3 — Reusable display SDK
 
@@ -33,10 +35,22 @@
 
 ### v1.0 — Safe operator workflow
 
-- Stable reconnect and refresh loop.
+- Reconfirm stable reconnect and refresh after a physical power cycle.
 - Explicit device selection when multiple badges advertise.
 - Recovery instructions and compatibility matrix.
 - No firmware path unless exact image provenance and rollback are verified.
+
+### Backup track — Custom firmware
+
+- [x] Add a read-only `probe` command for reproducible device inspection.
+- [x] Record the tested unit's sanitized identity: protocol `2.9`, firmware `11.1.0.3`, model field `1613`, and AC697 SDK-family marker.
+- [ ] Identify the exact AC697 chip marking, external flash part and LCD controller from board-level evidence.
+- [ ] Acquire and hash a matching stock firmware image without publishing device credentials.
+- [ ] Prove a wired or bootloader-level recovery path on sacrificial hardware.
+- [ ] Build a minimal screen and BLE proof of concept against the exact board configuration.
+- [ ] Permit OTA only after the stock image and recovery procedure have both been restored successfully.
+
+The SDK-family marker is not a flash target. AC697 variants, board pin maps, flash layouts and LCD initialization tables are not interchangeable.
 
 ## Definition of done
 

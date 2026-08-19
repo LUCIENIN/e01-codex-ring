@@ -56,6 +56,7 @@ public struct CodexSessionReader: Sendable {
                           let event = try? decoder.decode(SessionEvent.self, from: Data(line.utf8)),
                           event.payload?.type == "token_count",
                           let limits = event.payload?.rateLimits,
+                          limits.limitID == nil || limits.limitID == "codex",
                           let primary = limits.primary,
                           let usedPercent = primary.usedPercent
                     else {
@@ -123,8 +124,15 @@ private struct SessionEvent: Decodable {
     }
 
     struct Limits: Decodable {
+        let limitID: String?
         let primary: Window?
         let secondary: Window?
+
+        enum CodingKeys: String, CodingKey {
+            case limitID = "limit_id"
+            case primary
+            case secondary
+        }
     }
 
     struct Window: Decodable {

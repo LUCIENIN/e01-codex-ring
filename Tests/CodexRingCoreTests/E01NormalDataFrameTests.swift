@@ -52,4 +52,10 @@ final class E01NormalDataFrameTests: XCTestCase {
 
         XCTAssertEqual(packet, [0x9E, 0xD6, 0x0E, 0xC6, 0x01, 0x00, 0x01])
     }
+
+    func testBadgeMediaTypeSelectionMatchesVendorBadgeCommand() {
+        let packet = E01NormalDataFrame.packet(command: 0xDC, payload: [0x0C], serialNumber: 2)
+
+        XCTAssertEqual(packet, [0x9E, 0xFF, 0x16, 0xDC, 0x01, 0x00, 0x0C])
+    }
 }

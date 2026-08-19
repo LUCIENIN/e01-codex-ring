@@ -65,6 +65,36 @@ final class RingCommandParserTests: XCTestCase {
         XCTAssertEqual(command.options.scanTimeout, 12)
     }
 
+    func testProbeIsAReadOnlyDeviceInspectionCommand() throws {
+        let command = try RingCommandParser.parse(
+            arguments: ["probe", "--timeout", "20"],
+            homeDirectory: URL(filePath: "/Users/example"),
+            workingDirectory: URL(filePath: "/tmp/project")
+        )
+
+        XCTAssertEqual(command.kind, .probe)
+        XCTAssertEqual(command.options.scanTimeout, 20)
+    }
+
+    func testCleanupIsAnExplicitGeneratedMediaCommand() throws {
+        let command = try RingCommandParser.parse(
+            arguments: ["cleanup", "--timeout", "20"],
+            homeDirectory: URL(filePath: "/Users/example"),
+            workingDirectory: URL(filePath: "/tmp/project")
+        )
+
+        XCTAssertEqual(command.kind, .cleanup)
+    }
+
+    func testFormatMediaIsAnExplicitDestructiveCommand() throws {
+        let command = try RingCommandParser.parse(
+            arguments: ["format-media"],
+            homeDirectory: URL(filePath: "/tmp/home"),
+            workingDirectory: URL(filePath: "/tmp/work")
+        )
+        XCTAssertEqual(command.kind, .formatMedia)
+    }
+
     func testDisplayIsAnExplicitLiveMediaCommand() throws {
         let command = try RingCommandParser.parse(
             arguments: ["display", "--timeout", "30"],
@@ -73,6 +103,18 @@ final class RingCommandParserTests: XCTestCase {
         )
 
         XCTAssertEqual(command.kind, .display)
+        XCTAssertEqual(command.options.scanTimeout, 30)
+    }
+
+    func testDisplayWatchUsesTheBoundedRefreshInterval() throws {
+        let command = try RingCommandParser.parse(
+            arguments: ["display-watch", "--interval", "5", "--timeout", "30"],
+            homeDirectory: URL(filePath: "/Users/example"),
+            workingDirectory: URL(filePath: "/tmp/project")
+        )
+
+        XCTAssertEqual(command.kind, .displayWatch)
+        XCTAssertEqual(command.options.interval, 30)
         XCTAssertEqual(command.options.scanTimeout, 30)
     }
 }

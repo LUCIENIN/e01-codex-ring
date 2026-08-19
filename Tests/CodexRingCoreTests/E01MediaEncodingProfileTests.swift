@@ -2,15 +2,29 @@ import XCTest
 @testable import CodexRingCore
 
 final class E01MediaEncodingProfileTests: XCTestCase {
-    func testRequestsDeviceCompatibleMJPEG420PixelFormat() {
+    func testUsesAtMostThreeRepeatedFramesForLowSpaceAtomicUpdates() throws {
         let arguments = E01MediaEncodingProfile.ffmpegArguments(
             imagePath: "/tmp/card.png",
             moviePath: "/tmp/card.avi"
         )
 
-        guard let pixelFormatIndex = arguments.firstIndex(of: "-pix_fmt") else {
-            return XCTFail("E01 media encoding must explicitly select a compatible pixel format")
+        XCTAssertTrue(arguments.contains("-nostdin"))
+        XCTAssertEqual(value(after: "-pix_fmt", in: arguments), "yuvj420p")
+        XCTAssertEqual(value(after: "-c:v", in: arguments), "mjpeg")
+        XCTAssertEqual(value(after: "-q:v", in: arguments), "5")
+        XCTAssertEqual(value(after: "-t", in: arguments), "1")
+
+        let inputRate = try XCTUnwrap(Int(try XCTUnwrap(value(after: "-framerate", in: arguments))))
+        let outputRate = try XCTUnwrap(Int(try XCTUnwrap(value(after: "-r", in: arguments))))
+        let duration = try XCTUnwrap(Int(try XCTUnwrap(value(after: "-t", in: arguments))))
+        XCTAssertEqual(inputRate, outputRate)
+        XCTAssertLessThanOrEqual(outputRate * duration, 3)
+    }
+
+    private func value(after option: String, in arguments: [String]) -> String? {
+        guard let index = arguments.firstIndex(of: option), arguments.indices.contains(index + 1) else {
+            return nil
         }
-        XCTAssertEqual(arguments[pixelFormatIndex + 1], "yuvj420p")
+        return arguments[index + 1]
     }
 }

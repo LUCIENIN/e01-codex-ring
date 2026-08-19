@@ -27,6 +27,44 @@ public enum E01RCSPTransferProtocol {
         [0xFF, 0x00, 0x00, 0x00, 0x04]
     }
 
+    public static func deleteByNameParameter(_ fileName: String) -> [UInt8] {
+        [0x00] + Array(fileName.utf8)
+    }
+
+    /// Matches Jieli LargeFileTransferGetNameCmd.Param. FAT 8.3-compatible names
+    /// are sent as single-byte text with two NUL bytes; longer names use the
+    /// `\\U` marker followed by UTF-16LE and a UTF-16 terminator.
+    public static func transferNameParameter(_ fileName: String, renameTime: Int = 0) -> [UInt8] {
+        let fileName = transferFileName(fileName, renameTime: renameTime)
+        let name = (fileName as NSString).deletingPathExtension
+        let ext = (fileName as NSString).pathExtension
+        let suffix = ext.isEmpty ? "" : ".\(ext)"
+        if name.lengthOfBytes(using: .utf8) < 9, suffix.count < 5 {
+            return Array(fileName.utf8) + [0x00, 0x00]
+        }
+        var encoded: [UInt8] = [0x5C, 0x55]
+        for unit in fileName.utf16 {
+            encoded += [UInt8(truncatingIfNeeded: unit), UInt8(truncatingIfNeeded: unit >> 8)]
+        }
+        return encoded + [0x00, 0x00]
+    }
+
+    public static func transferFileName(_ fileName: String, renameTime: Int = 0) -> String {
+        let sanitized = fileName.unicodeScalars.filter { scalar in
+            let value = scalar.value
+            return value > 0x1F && ![0x2F, 0x3A, 0x3C, 0x3E, 0x5C, 0x22].contains(value)
+        }.map(String.init).joined()
+        let originalName = (sanitized as NSString).deletingPathExtension
+        let ext = (sanitized as NSString).pathExtension
+        let suffix = ext.isEmpty ? "" : ".\(ext)"
+        let renameSuffix = renameTime > 0 ? String(format: "%03d", renameTime) : ""
+        return originalName + renameSuffix + suffix
+    }
+
+    public static func formatDeviceParameter(deviceHandler: UInt32) -> [UInt8] {
+        uint32BE(deviceHandler)
+    }
+
     public static func sdCardOneHandler(fromGetSysInfoParameter parameter: [UInt8]) -> UInt32? {
         guard parameter.count >= 3 else { return nil }
         var index = 1 // first byte is the sys-info function
