@@ -75,4 +75,16 @@ final class RingCommandParserTests: XCTestCase {
         XCTAssertEqual(command.kind, .display)
         XCTAssertEqual(command.options.scanTimeout, 30)
     }
+
+    func testDisplayWatchUsesTheBoundedRefreshInterval() throws {
+        let command = try RingCommandParser.parse(
+            arguments: ["display-watch", "--interval", "5", "--timeout", "30"],
+            homeDirectory: URL(filePath: "/Users/example"),
+            workingDirectory: URL(filePath: "/tmp/project")
+        )
+
+        XCTAssertEqual(command.kind, .displayWatch)
+        XCTAssertEqual(command.options.interval, 30)
+        XCTAssertEqual(command.options.scanTimeout, 30)
+    }
 }

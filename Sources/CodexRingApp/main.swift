@@ -26,6 +26,41 @@ struct CodexRingApp {
                     try renderOnce(options: command.options)
                     try await Task.sleep(for: .seconds(command.options.interval))
                 }
+            case .displayWatch:
+                var syncState = DisplaySyncState()
+                let reader = CodexSessionReader()
+                while true {
+                    var cycleOutcome = DisplaySyncCycleOutcome.noData
+                    if let snapshot = try reader.latestSnapshot(in: command.options.sessionsDirectory) {
+                        let remainingPercent = snapshot.presentation(now: Date()).primary.remainingPercent
+                        if syncState.shouldPush(remainingPercent: remainingPercent) {
+                            do {
+                                let (result, mediaCount) = try await displayOnce(options: command.options)
+                                syncState.recordSuccessfulPush(remainingPercent: remainingPercent)
+                                writeOutputLine(
+                                    "display_sync_complete device=\(result.deviceName) "
+                                        + "remaining=\(remainingPercent) transferred_media_bytes=\(mediaCount)"
+                                )
+                                cycleOutcome = .pushed
+                            } catch {
+                                cycleOutcome = .failed
+                                FileHandle.standardError.write(
+                                    Data("display_sync_retry remaining=\(remainingPercent) error=\(error)\n".utf8)
+                                )
+                            }
+                        } else {
+                            cycleOutcome = .unchanged
+                            writeOutputLine("display_sync_unchanged remaining=\(remainingPercent)")
+                        }
+                    } else {
+                        FileHandle.standardError.write(Data("display_sync_waiting_for_usage\n".utf8))
+                    }
+                    let delay = DisplaySyncSchedule.delay(
+                        after: cycleOutcome,
+                        regularInterval: command.options.interval
+                    )
+                    try await Task.sleep(for: .seconds(delay))
+                }
             case .scan:
                 let devices = try await E01DiscoveryController().scan(timeout: command.options.scanTimeout)
                 if devices.isEmpty {
@@ -53,29 +88,10 @@ struct CodexRingApp {
                         + "platform=\(platform) model=\(modelNumber)"
                 )
             case .display:
-                let displaySize = CGSize(width: 368, height: 368)
-                let displayOptions = RingCommandOptions(
-                    sessionsDirectory: command.options.sessionsDirectory,
-                    outputURL: command.options.outputURL,
-                    size: displaySize,
-                    interval: command.options.interval,
-                    scanTimeout: command.options.scanTimeout
-                )
-                try renderOnce(options: displayOptions)
-                let movieURL = command.options.outputURL
-                    .deletingLastPathComponent()
-                    .appending(path: "codex-ring-display.avi")
-                try makeStillMovie(imageURL: command.options.outputURL, movieURL: movieURL)
-                let media = try Data(contentsOf: movieURL)
-                let result = try await E01BindController().display(
-                    media: media,
-                    fileName: "CODEX.AVI",
-                    request: makeBindRequest(),
-                    timeout: max(command.options.scanTimeout, 120)
-                )
+                let (result, mediaCount) = try await displayOnce(options: command.options)
                 print(
                     "display_transfer_complete device=\(result.deviceName) "
-                        + "size=368x368 transferred_media_bytes=\(media.count)"
+                        + "size=368x368 transferred_media_bytes=\(mediaCount)"
                 )
             }
         } catch {
@@ -94,6 +110,33 @@ struct CodexRingApp {
                 locale: .current
             )?.contains("a") == true
         )
+    }
+
+    private static func writeOutputLine(_ line: String) {
+        FileHandle.standardOutput.write(Data("\(line)\n".utf8))
+    }
+
+    private static func displayOnce(options: RingCommandOptions) async throws -> (E01BindResult, Int) {
+        let displayOptions = RingCommandOptions(
+            sessionsDirectory: options.sessionsDirectory,
+            outputURL: options.outputURL,
+            size: CGSize(width: 368, height: 368),
+            interval: options.interval,
+            scanTimeout: options.scanTimeout
+        )
+        try renderOnce(options: displayOptions)
+        let movieURL = options.outputURL
+            .deletingLastPathComponent()
+            .appending(path: "codex-ring-display.avi")
+        try makeStillMovie(imageURL: options.outputURL, movieURL: movieURL)
+        let media = try Data(contentsOf: movieURL)
+        let result = try await E01BindController().display(
+            media: media,
+            fileName: "codex_push.avi",
+            request: makeBindRequest(),
+            timeout: max(options.scanTimeout, 120)
+        )
+        return (result, media.count)
     }
 
     private static func makeStillMovie(imageURL: URL, movieURL: URL) throws {

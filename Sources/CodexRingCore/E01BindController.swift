@@ -128,6 +128,8 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
     private var updateAllowedLength = 0
     private var updateSerialNumber: UInt8 = 0
     private var updateHeaderIndex = 0
+    private let knownDeviceStore = E01KnownDeviceStore()
+    private var usedKnownDevice = false
 
     public func bind(
         request: E01BindRequest,
@@ -207,12 +209,18 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                 self.updateAllowedLength = 0
                 self.updateSerialNumber = 0
                 self.updateHeaderIndex = 0
+                self.usedKnownDevice = false
                 self.normalCharacteristicsDiscovered = false
                 self.rcspCharacteristicsDiscovered = false
                 self.stage = "waiting_for_bluetooth"
                 self.centralManager = CBCentralManager(delegate: self, queue: self.queue)
                 let timeoutWorkItem = DispatchWorkItem { [weak self] in
                     guard let self else { return }
+                    if self.usedKnownDevice,
+                       (self.stage == "connecting" || self.stage == "discovering_service") {
+                        try? self.knownDeviceStore.clear()
+                        self.traceTransfer("known_device_cleared_after_timeout")
+                    }
                     let error: E01BindError
                     if self.stage.contains("rcsp_auth") {
                         error = .noRCSPAuthResponse(packetHeaders: self.notificationPacketHeaders)
@@ -221,6 +229,9 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                     } else if self.stage == "writing_badge_info_request"
                         || self.stage == "waiting_for_badge_info_response" {
                         error = .noBadgeInfoResponse(packetHeaders: self.notificationPacketHeaders)
+                    } else if self.stage == "writing_badge_mode_request"
+                        || self.stage == "waiting_for_badge_mode_response" {
+                        error = .timedOut(stage: self.stage)
                     } else if self.stage.contains("transfer") || self.stage.contains("update")
                         || self.stage.hasPrefix("transferring_") {
                         error = .timedOut(stage: self.stage)
@@ -246,6 +257,14 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn:
+            if let identifier = knownDeviceStore.load(),
+               let peripheral = central.retrievePeripherals(withIdentifiers: [identifier]).first {
+                usedKnownDevice = true
+                traceTransfer("known_device_retrieved")
+                connect(peripheral, using: central)
+                return
+            }
+            usedKnownDevice = false
             stage = "scanning"
             central.scanForPeripherals(
                 withServices: Self.advertisedDataServiceAliases(),
@@ -274,14 +293,13 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
             return
         }
 
-        central.stopScan()
-        stage = "connecting"
-        self.peripheral = peripheral
-        peripheral.delegate = self
-        central.connect(peripheral)
+        usedKnownDevice = false
+        traceTransfer("device_discovered rssi=\(RSSI)")
+        connect(peripheral, using: central)
     }
 
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        traceTransfer("device_connected")
         stage = "discovering_service"
         var services = Self.regularDataServiceAliases()
         if shouldProbeRCSP {
@@ -295,7 +313,16 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
         didFailToConnect peripheral: CBPeripheral,
         error: Error?
     ) {
+        traceTransfer("device_connect_failed")
         finish(with: .failure(.connectFailed))
+    }
+
+    private func connect(_ peripheral: CBPeripheral, using central: CBCentralManager) {
+        central.stopScan()
+        stage = "connecting"
+        self.peripheral = peripheral
+        peripheral.delegate = self
+        central.connect(peripheral)
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
@@ -305,6 +332,8 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
             finish(with: .failure(.missingDataService))
             return
         }
+        try? knownDeviceStore.save(peripheral.identifier)
+        traceTransfer("known_device_saved")
 
         // The E01 advertises the service in short form (`FD00`). Its characteristic UUID
         // representation is device/stack dependent, so enumerate only this already-confirmed
@@ -335,6 +364,10 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
 
         if service.uuid == Self.dataServiceUUID() {
             for characteristic in service.characteristics ?? [] {
+                traceTransfer(
+                    "characteristic uuid=\(characteristic.uuid.uuidString) "
+                        + "properties=\(characteristic.properties.rawValue)"
+                )
                 switch characteristic.uuid {
                 case Self.primaryNotifyCharacteristicUUID():
                     primaryNotificationCharacteristic = characteristic
@@ -484,6 +517,8 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
             stage = "waiting_for_bind_response"
         case "writing_badge_info_request":
             stage = "waiting_for_badge_info_response"
+        case "writing_badge_mode_request":
+            stage = "waiting_for_badge_mode_response"
         case "writing_rcsp_probe":
             stage = "waiting_for_rcsp_probe"
         case "writing_rcsp_auth":
@@ -641,21 +676,27 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                 return
             }
             badgeResult = result
-            startRCSPAuthentication()
+            guard mediaBytes != nil else {
+                startRCSPAuthentication()
+                return
+            }
+            // ZRun selects the electronic-badge file category before it starts the
+            // Jieli transfer task. The device acknowledges the same 0xDC command,
+            // and only then does the app begin RCSP authentication/file transfer.
+            let badgeModeRequest = E01NormalDataFrame.packet(
+                command: 0xDC,
+                payload: [0x0C],
+                serialNumber: 2
+            )
+            writeNormal(badgeModeRequest, stage: "writing_badge_mode_request")
             return
         }
 
-        if (stage == "writing_video_info_request" || stage == "waiting_for_video_info_response"),
-           let videoInfo = E01VideoInfoResponse.parseDetails(bytes),
-           let mediaBytes {
-            let wrapped = E01VideoDialProtocol.wrapAVI(
-                mediaBytes,
-                width: videoInfo.size.width,
-                height: videoInfo.size.height,
-                backgroundSupportFlag: videoInfo.backgroundSupportFlag
-            )
-            videoDialUpdateData = Array(wrapped.dropFirst(27))
-            writeUpdateCommand(command: 0xC0, payload: Array(wrapped.prefix(27)), stage: "writing_update_start")
+        if (stage == "writing_badge_mode_request" || stage == "waiting_for_badge_mode_response"),
+           bytes.count >= 4,
+           bytes[3] == 0xDC {
+            traceTransfer("badge_mode_acknowledged type=12")
+            startRCSPAuthentication()
             return
         }
     }

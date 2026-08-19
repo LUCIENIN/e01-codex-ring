@@ -6,6 +6,7 @@ public enum RingCommandKind: Equatable, Sendable {
     case scan
     case bind
     case display
+    case displayWatch
 }
 
 public struct RingCommandOptions: Equatable, Sendable {
@@ -70,6 +71,8 @@ public enum RingCommandParser {
             kind = .bind
         case "display":
             kind = .display
+        case "display-watch":
+            kind = .displayWatch
         default:
             throw RingCommandError.unknownCommand(commandName)
         }

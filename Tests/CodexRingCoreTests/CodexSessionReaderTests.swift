@@ -91,6 +91,27 @@ final class CodexSessionReaderTests: XCTestCase {
         XCTAssertEqual(snapshot?.observedAt, Date(timeIntervalSince1970: 1_786_977_959.682))
     }
 
+    func testIgnoresNewerModelSpecificLimitWhenReadingMainCodexLimit() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try write(
+            """
+            {"timestamp":"2026-08-17T10:00:00Z","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":70}}}}
+            {"timestamp":"2026-08-17T11:00:00Z","payload":{"type":"token_count","rate_limits":{"limit_id":"codex_bengalfox","primary":{"used_percent":0}}}}
+            """,
+            to: root.appending(path: "2026/08/17/rollout-mixed-limits.jsonl")
+        )
+
+        let snapshot = try CodexSessionReader().latestSnapshot(
+            in: root,
+            now: Date(timeIntervalSince1970: 1_786_924_800),
+            lookbackDays: 14
+        )
+
+        XCTAssertEqual(snapshot?.primary.usedPercent, 70)
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

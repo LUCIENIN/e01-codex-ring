@@ -14,6 +14,7 @@
 | Badge/firmware identity parsing | Done | parser tests and bind output fields |
 | Media/protocol encoders | Done at unit level | deterministic frame/CRC tests |
 | Live custom-content write | Protocol-complete on one E01 | 229,798 bytes transferred; tail and offset-0 verification completed |
+| Continuous quota sync | Code-complete, hardware recheck pending | main-limit filtering, change-only writes, LaunchAgent installer and reconnect tests |
 | Firmware replacement | Not started | no exact official image or rollback proof |
 
 ## Milestones
@@ -33,7 +34,7 @@
 
 ### v1.0 — Safe operator workflow
 
-- Stable reconnect and refresh loop.
+- Reconfirm stable reconnect and refresh after a physical power cycle.
 - Explicit device selection when multiple badges advertise.
 - Recovery instructions and compatibility matrix.
 - No firmware path unless exact image provenance and rollback are verified.

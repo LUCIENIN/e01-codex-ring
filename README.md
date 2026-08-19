@@ -49,9 +49,37 @@ swift run codex-ring bind --timeout 20
 
 # 写屏；失败会以非零状态退出
 swift run codex-ring display --timeout 30
+
+# 持续同步；至少每 30 秒检查一次，只在剩余百分比变化后写屏
+swift run codex-ring display-watch --interval 30 --timeout 30
 ```
 
 `display_transfer_complete` 只有在设备明确返回成功结果后才会输出。看到扫描或绑定成功，不代表屏幕内容已经更新。
+
+`display-watch` 会持续读取最新的本地额度快照。只有设备写入成功后，它才记住该百分比；扫描或传输失败会在下一轮重试，相同百分比不会重复写入。E01 必须处于 Mac 可发现的 BLE 状态，手机端 ZRun 占用连接时无法刷新。
+
+## 新徽章首次同步
+
+新用户需要一台 macOS 14+ 的 Mac、Swift 6+、Homebrew 版 FFmpeg，以及已经产生本地额度记录的 Codex Desktop/CLI。程序读取的是本机 JSONL 中主额度 `limit_id=codex`，不读取聊天正文、Cookie 或云端账号密码。
+
+```bash
+brew install ffmpeg
+git clone https://github.com/LUCIENIN/e01-codex-ring.git
+cd e01-codex-ring
+chmod +x scripts/install-display-watch.zsh
+./scripts/install-display-watch.zsh
+```
+
+安装完成后按这个顺序操作：
+
+1. 关闭手机蓝牙，避免 ZRun 或手机系统先占用徽章连接。
+2. 给 E01 断电再上电一次，让 Mac 捕获它的短时 BLE 广播。
+3. 等待 `display_sync_complete`；只有这条日志和屏幕肉眼变化同时出现，才算同步成功。
+4. 查看日志：`tail -f .runtime/display-watch.error.log .runtime/display-watch.log`。
+
+首次完成 GATT 服务发现后，程序会在 `~/.codex/e01-known-device-id` 保存本机 CoreBluetooth UUID。更换另一块徽章时执行 `./scripts/install-display-watch.zsh --reset-device`，旧 UUID 会先备份，再重新扫描新设备。
+
+这不是 HDMI 或 USB 外接屏。显示链路是“本地 Codex 额度 → 368×368 图片 → MJPEG AVI → BLE/RCSP 推送”，因此更新粒度是百分比变化后的同步，不是逐帧镜像。当前只在一台 368×368 E01 上验证过媒体写入；自动重连仍需按设备固件逐台验收。
 
 ## 写入自己的程序/内容
 
