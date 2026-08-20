@@ -4,6 +4,13 @@ import Foundation
 
 @main
 struct CodexRingApp {
+    @MainActor private static var bluetoothAuthorizationWindow: NSWindow?
+
+    private struct BrowsedMediaFile {
+        let entry: E01FileBrowseEntry
+        let path: String
+    }
+
     private enum AppError: Error {
         case ffmpegUnavailable
         case ffmpegFailed(Int32)
@@ -78,15 +85,37 @@ struct CodexRingApp {
                             maximumUnchangedAge: 300
                         ) {
                             do {
-                                let previousMediaFileName = syncState.activeMediaFileName
-                                let preferredMediaFileName = syncState.nextPreferredMediaFileName
+                                let mediaUpdate = syncState.nextMediaUpdate
+                                let managedFiles = try await browseAllMediaFiles(
+                                    timeout: command.options.scanTimeout
+                                )
+                                .map(\.entry)
+                                .filter {
+                                    $0.isFile && E01ManagedMediaPolicy.isManagedFileName($0.name)
+                                }
+                                let preflightCleanup = E01ManagedMediaPolicy.filesToDeleteBeforeUpload(
+                                    managedFiles,
+                                    activeFileName: syncState.activeMediaFileName,
+                                    destinationFileName: mediaUpdate.destinationFileName
+                                )
+                                if !preflightCleanup.isEmpty {
+                                    let cleanupResult = try await E01BindController().deleteManagedMediaFiles(
+                                        preflightCleanup,
+                                        request: makeBindRequest(),
+                                        timeout: command.options.scanTimeout
+                                    )
+                                    writeOutputLine(
+                                        "display_sync_cleanup_complete device=\(cleanupResult.deviceName) "
+                                            + "phase=preflight files=\(preflightCleanup.count)"
+                                    )
+                                }
                                 let (result, mediaCount) = try await displayOnce(
                                     options: command.options,
-                                    fileName: preferredMediaFileName,
+                                    fileName: mediaUpdate.destinationFileName,
                                     dashboard: dashboard
                                 )
                                 let committedMediaFileName = result.committedMediaFileName
-                                    ?? preferredMediaFileName
+                                    ?? mediaUpdate.destinationFileName
                                 syncState.recordSuccessfulPush(
                                     contentSignature: signature,
                                     at: Date(),
@@ -104,21 +133,30 @@ struct CodexRingApp {
                                         + "\(dashboardLogFields(dashboard)) file=\(committedMediaFileName) "
                                         + "transferred_media_bytes=\(mediaCount)"
                                 )
-                                if let previousMediaFileName,
-                                   previousMediaFileName != committedMediaFileName {
-                                    do {
-                                        try await cleanupPreviousMedia(
-                                            previousMediaFileName,
-                                            options: command.options
+                                do {
+                                    let uploadedFiles = try await browseAllMediaFiles(
+                                        timeout: command.options.scanTimeout
+                                    )
+                                    .map(\.entry)
+                                    let staleFiles = E01ManagedMediaPolicy.filesToDeleteAfterUpload(
+                                        uploadedFiles,
+                                        committedFileName: committedMediaFileName
+                                    )
+                                    if !staleFiles.isEmpty {
+                                        let cleanupResult = try await E01BindController().deleteManagedMediaFiles(
+                                            staleFiles,
+                                            request: makeBindRequest(),
+                                            timeout: command.options.scanTimeout
                                         )
-                                    } catch {
-                                        FileHandle.standardError.write(
-                                            Data(
-                                                ("display_sync_cleanup_deferred file=\(previousMediaFileName) "
-                                                    + "error=\(error)\n").utf8
-                                            )
+                                        writeOutputLine(
+                                            "display_sync_cleanup_complete device=\(cleanupResult.deviceName) "
+                                                + "phase=post_commit files=\(staleFiles.count)"
                                         )
                                     }
+                                } catch {
+                                    FileHandle.standardError.write(
+                                        Data("display_sync_stale_cleanup_retry error=\(error)\n".utf8)
+                                    )
                                 }
                                 cycleOutcome = .pushed
                                 consecutiveFailures = 0
@@ -166,6 +204,9 @@ struct CodexRingApp {
                     try await Task.sleep(for: .seconds(delay))
                 }
             case .scan:
+                await MainActor.run {
+                    presentBluetoothAuthorizationWindowIfNeeded()
+                }
                 let devices = try await E01DiscoveryController().scan(timeout: command.options.scanTimeout)
                 if devices.isEmpty {
                     print("no_device_found")
@@ -202,16 +243,34 @@ struct CodexRingApp {
                         + "firmware=\(result.firmwareVersion ?? "unknown") "
                         + "platform=\(result.platform.map(String.init) ?? "unknown") "
                         + "model=\(result.modelNumber.map(String.init) ?? "unknown") "
-                        + "rcsp_target=\(result.rcspTargetInfoHex ?? "unknown")"
+                    + "rcsp_target=\(result.rcspTargetInfoHex ?? "unknown")"
                 )
+            case .browseMedia:
+                let files = try await browseAllMediaFiles(timeout: command.options.scanTimeout)
+                if files.isEmpty {
+                    print("media_file none")
+                } else {
+                    for file in files {
+                        print(
+                            "media_file type=\(file.entry.isFile ? "file" : "folder") "
+                                + "device_index=\(file.entry.deviceIndex) cluster=\(file.entry.cluster) "
+                                + "path=\(file.path)"
+                        )
+                    }
+                }
             case .cleanup:
-                for fileName in ["codex_push001.avi", "codex_push002.avi", "codex_push003.avi"] {
-                    let result = try await E01BindController().cleanupGeneratedMedia(
-                        fileName: fileName,
+                let managedFiles = try await browseAllMediaFiles(timeout: command.options.scanTimeout)
+                    .map(\.entry)
+                    .filter { $0.isFile && E01ManagedMediaPolicy.isManagedFileName($0.name) }
+                if managedFiles.isEmpty {
+                    print("cleanup_complete files=0")
+                } else {
+                    let result = try await E01BindController().deleteManagedMediaFiles(
+                        managedFiles,
                         request: makeBindRequest(),
                         timeout: command.options.scanTimeout
                     )
-                    print("cleanup_complete device=\(result.deviceName) file=\(fileName)")
+                    print("cleanup_complete device=\(result.deviceName) files=\(managedFiles.count)")
                 }
             case .formatMedia:
                 let result = try await E01BindController().formatMediaStorage(
@@ -228,7 +287,7 @@ struct CodexRingApp {
                 )
                 let (result, mediaCount) = try await displayOnce(
                     options: command.options,
-                    fileName: "badge.avi",
+                    fileName: "badge.jpg",
                     dashboard: dashboard
                 )
                 print(
@@ -240,6 +299,29 @@ struct CodexRingApp {
             FileHandle.standardError.write(Data("codex-ring: \(error)\n".utf8))
             Foundation.exit(2)
         }
+    }
+
+    @MainActor
+    private static func presentBluetoothAuthorizationWindowIfNeeded() {
+        guard Bundle.main.bundleIdentifier == "com.lucien.e01-codex-ring" else { return }
+        NSApplication.shared.setActivationPolicy(.regular)
+        NSApplication.shared.finishLaunching()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 140),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Codex Ring"
+        let label = NSTextField(
+            wrappingLabelWithString: "正在请求蓝牙权限，用于自动同步 E01 屏幕。请在系统提示中点“允许”。"
+        )
+        label.frame = NSRect(x: 28, y: 42, width: 364, height: 54)
+        window.contentView?.addSubview(label)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        bluetoothAuthorizationWindow = window
     }
 
     private static func makeBindRequest() -> E01BindRequest {
@@ -254,6 +336,35 @@ struct CodexRingApp {
         )
     }
 
+    private static func browseAllMediaFiles(timeout: TimeInterval) async throws -> [BrowsedMediaFile] {
+        var pending: [([UInt32], String, UInt16)] = [([0], "/", 1)]
+        var visited: Set<String> = []
+        var files: [BrowsedMediaFile] = []
+        while !pending.isEmpty, visited.count < 32 {
+            let (clusters, path, offset) = pending.removeFirst()
+            let pageKey = clusters.map(String.init).joined(separator: ".") + ":\(offset)"
+            guard visited.insert(pageKey).inserted else { continue }
+            let result = try await E01BindController().browseMediaFiles(
+                pathClusters: clusters,
+                offset: offset,
+                readCount: 50,
+                request: makeBindRequest(),
+                timeout: timeout
+            )
+            for entry in result.mediaFiles {
+                let entryPath = path == "/" ? "/\(entry.name)" : "\(path)/\(entry.name)"
+                files.append(BrowsedMediaFile(entry: entry, path: entryPath))
+                if !entry.isFile, clusters.count < 4 {
+                    pending.append((clusters + [entry.cluster], entryPath, 1))
+                }
+            }
+            if result.fileBrowseReachedEnd == false, !result.mediaFiles.isEmpty {
+                pending.append((clusters, path, offset + UInt16(result.mediaFiles.count)))
+            }
+        }
+        return files
+    }
+
     private static func writeOutputLine(_ line: String) {
         FileHandle.standardOutput.write(Data("\(line)\n".utf8))
     }
@@ -261,6 +372,7 @@ struct CodexRingApp {
     private static func displayOnce(
         options: RingCommandOptions,
         fileName: String,
+        replacingFileName: String? = nil,
         dashboard: QuotaDashboardPresentation
     ) async throws -> (E01BindResult, Int) {
         let displayOptions = RingCommandOptions(
@@ -271,43 +383,31 @@ struct CodexRingApp {
             scanTimeout: options.scanTimeout
         )
         try renderOnce(options: displayOptions, dashboard: dashboard)
-        let movieURL = options.outputURL
+        let jpegURL = options.outputURL
             .deletingLastPathComponent()
-            .appending(path: "codex-ring-display.avi")
-        try makeStillMovie(imageURL: options.outputURL, movieURL: movieURL)
-        let media = try Data(contentsOf: movieURL)
+            .appending(path: "codex-ring-display.jpg")
+        try makeStaticJPEG(imageURL: options.outputURL, jpegURL: jpegURL)
+        let media = try Data(contentsOf: jpegURL)
         let result = try await E01BindController().display(
             media: media,
             fileName: fileName,
+            replacingFileName: replacingFileName,
             request: makeBindRequest(),
             timeout: max(options.scanTimeout, 120)
         )
         return (result, media.count)
     }
 
-    private static func cleanupPreviousMedia(
-        _ fileName: String,
-        options: RingCommandOptions
-    ) async throws {
-        try await Task.sleep(for: .seconds(1))
-        let result = try await E01BindController().cleanupGeneratedMedia(
-            fileName: fileName,
-            request: makeBindRequest(),
-            timeout: max(options.scanTimeout, 30)
-        )
-        writeOutputLine("display_sync_cleanup_complete device=\(result.deviceName) file=\(fileName)")
-    }
-
-    private static func makeStillMovie(imageURL: URL, movieURL: URL) throws {
+    private static func makeStaticJPEG(imageURL: URL, jpegURL: URL) throws {
         let executable = URL(filePath: "/opt/homebrew/bin/ffmpeg")
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
             throw AppError.ffmpegUnavailable
         }
         let process = Process()
         process.executableURL = executable
-        process.arguments = E01MediaEncodingProfile.ffmpegArguments(
+        process.arguments = E01MediaEncodingProfile.ffmpegJPEGArguments(
             imagePath: imageURL.path,
-            moviePath: movieURL.path
+            jpegPath: jpegURL.path
         )
         try process.run()
         process.waitUntilExit()

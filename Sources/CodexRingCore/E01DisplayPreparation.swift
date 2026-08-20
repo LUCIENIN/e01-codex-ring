@@ -5,7 +5,12 @@ public enum E01DisplayPreparationStep: Equatable, Sendable {
 public enum E01PostAuthenticationStep: Equatable, Sendable {
     case inspectTargetInfo
     case queryStorage
-    case deleteFile(String)
+    case prepareDeletion(String)
+}
+
+public enum E01PostDeletionStep: Equatable, Sendable {
+    case finishCleanup
+    case queryStorage
 }
 
 public enum E01DisplayPreparation {
@@ -19,11 +24,15 @@ public enum E01DisplayPreparation {
         shouldFormatMedia: Bool
     ) -> E01PostAuthenticationStep {
         if let cleanupFileName {
-            return .deleteFile(cleanupFileName)
+            return .prepareDeletion(cleanupFileName)
         }
         if hasMedia || shouldFormatMedia {
             return .queryStorage
         }
         return .inspectTargetInfo
+    }
+
+    public static func nextStepAfterDeletion(hasMedia: Bool) -> E01PostDeletionStep {
+        hasMedia ? .queryStorage : .finishCleanup
     }
 }

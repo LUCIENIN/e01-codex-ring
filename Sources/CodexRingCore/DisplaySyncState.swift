@@ -1,5 +1,10 @@
 import Foundation
 
+public struct DisplaySyncMediaUpdate: Equatable, Sendable {
+    public let fileNameToReplace: String?
+    public let destinationFileName: String
+}
+
 public struct DisplaySyncState: Codable, Equatable, Sendable {
     private var lastPushedRemainingPercent: Int?
     private var lastPushedContentSignature: String?
@@ -56,9 +61,16 @@ public struct DisplaySyncState: Codable, Equatable, Sendable {
 
     public var nextPreferredMediaFileName: String {
         if activeMediaFileName?.uppercased().hasPrefix("CODEXA") == true {
-            return "CODEXB.AVI"
+            return "CODEXB.JPG"
         }
-        return "CODEXA.AVI"
+        return "CODEXA.JPG"
+    }
+
+    public var nextMediaUpdate: DisplaySyncMediaUpdate {
+        DisplaySyncMediaUpdate(
+            fileNameToReplace: activeMediaFileName,
+            destinationFileName: nextPreferredMediaFileName
+        )
     }
 }
 

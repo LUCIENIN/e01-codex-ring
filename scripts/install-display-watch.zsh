@@ -6,12 +6,47 @@ label="com.lucien.e01-codex-ring"
 agent_path="${HOME}/Library/LaunchAgents/${label}.plist"
 runtime_dir="${HOME}/.local/state/e01-codex-ring"
 install_root="${HOME}/.local/lib/e01-codex-ring"
-binary_path="${install_root}/codex-ring"
-resource_name="CodexRing_CodexRingCore.resources"
-build_binary="${repo_root}/.build/release/codex-ring"
-build_resources="${repo_root}/.build/release/${resource_name}"
+bundle_id="com.lucien.e01-codex-ring"
+application_name="CodexRing.app"
+application_path="${install_root}/${application_name}"
+binary_path="${application_path}/Contents/MacOS/codex-ring"
+resource_name="CodexRing_CodexRingCore.bundle"
+build_binary="${E01_BUILD_BINARY:-${repo_root}/.build/release/codex-ring}"
+build_resources="${E01_BUILD_RESOURCES:-${repo_root}/.build/release/${resource_name}}"
 sessions_path="${CODEX_SESSIONS_DIR:-${HOME}/.codex/sessions}"
 known_device_path="${HOME}/.codex/e01-known-device-id"
+
+stage_runtime() {
+    local destination=$1
+    local staged_application="${destination}/${application_name}"
+    local staged_contents="${staged_application}/Contents"
+    local staged_macos="${staged_contents}/MacOS"
+    local staged_resources="${staged_contents}/Resources"
+    local staged_info="${staged_contents}/Info.plist"
+    if [[ ! -d "${build_resources}" ]]; then
+        print -u2 "Missing SwiftPM resource bundle: ${build_resources}"
+        return 1
+    fi
+    mkdir -p "${staged_macos}" "${staged_resources}"
+    if [[ -e "${staged_macos}/${resource_name}" ]]; then
+        /bin/rm -rf "${staged_macos}/${resource_name}"
+    fi
+    /usr/bin/install -m 0755 "${build_binary}" "${staged_macos}/codex-ring"
+    /usr/bin/install -m 0644 \
+        "${build_resources}/jl_auth_2.0.0.js" \
+        "${staged_resources}/jl_auth_2.0.0.js"
+    /usr/bin/plutil -create xml1 "${staged_info}"
+    /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string ${bundle_id}" "${staged_info}"
+    /usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string codex-ring" "${staged_info}"
+    /usr/libexec/PlistBuddy -c "Add :CFBundleName string CodexRing" "${staged_info}"
+    /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Codex Ring" "${staged_info}"
+    /usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string APPL" "${staged_info}"
+    /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 1" "${staged_info}"
+    /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 0.1.0" "${staged_info}"
+    /usr/libexec/PlistBuddy -c "Add :LSUIElement bool false" "${staged_info}"
+    /usr/libexec/PlistBuddy -c "Add :NSBluetoothAlwaysUsageDescription string Syncs quota cards to the E01 display." "${staged_info}"
+    /usr/libexec/PlistBuddy -c "Add :NSBluetoothPeripheralUsageDescription string Syncs quota cards to the E01 display." "${staged_info}"
+}
 
 if [[ "${1:-}" == "--reset-device" && -f "${known_device_path}" ]]; then
     backup_path="${known_device_path}.backup.$(date +%Y%m%d%H%M%S)"
@@ -20,12 +55,19 @@ if [[ "${1:-}" == "--reset-device" && -f "${known_device_path}" ]]; then
 fi
 
 mkdir -p "${runtime_dir}" "${install_root}" "${HOME}/Library/LaunchAgents"
+if [[ "${1:-}" == "--stage-runtime" ]]; then
+    if [[ -z "${2:-}" ]]; then
+        print -u2 "Usage: $0 --stage-runtime DESTINATION"
+        exit 2
+    fi
+    stage_runtime "$2"
+    print "Staged runtime in $2"
+    exit 0
+fi
 cd "${repo_root}"
 swift build -c release
-/usr/bin/install -m 0755 "${build_binary}" "${binary_path}"
-if [[ -d "${build_resources}" ]]; then
-    /usr/bin/ditto "${build_resources}" "${install_root}/${resource_name}"
-fi
+stage_runtime "${install_root}"
+/usr/bin/codesign --force --sign - --identifier "${bundle_id}" "${application_path}"
 
 launchctl bootout "gui/${UID}/${label}" 2>/dev/null || true
 

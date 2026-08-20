@@ -6,6 +6,7 @@ public enum RingCommandKind: Equatable, Sendable {
     case scan
     case bind
     case probe
+    case browseMedia
     case cleanup
     case formatMedia
     case display
@@ -74,6 +75,8 @@ public enum RingCommandParser {
             kind = .bind
         case "probe":
             kind = .probe
+        case "browse-media":
+            kind = .browseMedia
         case "cleanup":
             kind = .cleanup
         case "format-media":
