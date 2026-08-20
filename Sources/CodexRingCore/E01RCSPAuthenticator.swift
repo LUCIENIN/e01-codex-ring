@@ -19,10 +19,15 @@ public struct E01RCSPAuthTransformer: Sendable {
         guard challenge.count == 16 else {
             throw E01RCSPAuthError.invalidChallengeLength
         }
-        guard let resourceURL = Bundle.module.url(
+        let resourceURL = Bundle.main.url(
             forResource: "jl_auth_2.0.0",
             withExtension: "js"
-        ), let source = try? String(contentsOf: resourceURL, encoding: .utf8) else {
+        ) ?? Bundle.module.url(
+            forResource: "jl_auth_2.0.0",
+            withExtension: "js"
+        )
+        guard let resourceURL,
+              let source = try? String(contentsOf: resourceURL, encoding: .utf8) else {
             throw E01RCSPAuthError.resourceUnavailable
         }
         guard let context = JSContext() else {

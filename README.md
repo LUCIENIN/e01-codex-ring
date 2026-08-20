@@ -2,7 +2,7 @@
 
 一个面向 macOS 的实验性 Swift 项目：读取本机 Codex 与 Kimi Code 额度，生成圆形仪表盘，并通过 BLE 把自定义内容写入 E01/ZRun 圆形电子胸牌。
 
-> 当前结论：预览、BLE 扫描、绑定、设备信息解析、RCSP 媒体传输和自定义画面显示已经在一台 368×368 E01 上完成实机验证。`display` 传输 MJPEG/YUVJ420P AVI，只有设备明确完成传输后才输出 `display_transfer_complete`；持续同步已经加入后台启动、短超时重试、旧连接恢复和状态落盘，但每个固件仍需做一次断电重连验收。仓库暂不刷写固件。
+> 当前结论：预览、BLE 扫描、绑定、设备信息解析、RCSP 媒体传输和自定义画面显示曾在一台 368×368 E01 上完成实机验证。当前 `display` 把静态仪表盘编码为 368×368 JPEG；程序只有在设备明确结束传输后才输出 `display_transfer_complete`，但仍需肉眼确认圆屏确实切换。持续同步已经加入后台启动、短超时重试、旧连接恢复和状态落盘，每个固件仍需做一次断电重连验收。仓库暂不刷写固件。
 
 ![Status](https://img.shields.io/badge/status-hardware--investigation-orange)
 ![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-blue)
@@ -18,7 +18,7 @@
 - 在 `FD01/FD02/FD03` 白名单内执行绑定，并校验 `0x61` 响应。
 - 解析屏幕尺寸、存储容量、协议版本、固件版本、平台和型号字段。
 - 实现普通数据帧、视频表盘 `C0/C1/C2/C3/C5`、RCSP 帧和大文件传输的解析/编码测试。
-- 在一台自有 E01 上通过 RCSP 完成 368×368 AVI 传输，并由用户肉眼确认自定义画面已经显示。
+- 在一台自有 E01 上通过 RCSP 完成媒体传输，并由用户肉眼确认过自定义画面显示；当前静态 JPEG 路径仍以每次实屏回读为最终验收。
 - 后台连接卡住时会在 15 秒结束本轮；前两次保留已知设备，连续三次失败后自动切换为重新扫描。
 
 ## 验证边界
@@ -58,7 +58,7 @@ swift run codex-ring display-watch --interval 30 --timeout 30
 
 `display_transfer_complete` 只有在设备明确返回成功结果后才会输出。看到扫描或绑定成功，不代表屏幕内容已经更新。
 
-`display-watch` 在正常空闲时按不短于 30 秒的周期读取 Codex，并向 Kimi Code 官方接口请求最新额度；BLE 重试不会把 Kimi 请求加速到 30 秒以内。只有设备写入成功后，它才把三项百分比的组合签名、时间和设备中的活动文件名保存到 `~/.codex/e01-display-sync-state.json`；任一百分比变化都会触发下一次写屏。Kimi 最近一次成功结果会脱敏缓存到 `~/.codex/e01-kimi-usage-cache.json`，临时断网或服务重启时可以继续显示旧值，超过 10 分钟会标为 `STALE DATA`。扫描或传输失败会按 5、15、30、60 秒的上限退避重试；长时间不变时每 5 分钟重新确认一次，避免设备重启后保留旧画面。E01 必须开机并处于 Mac 可连接的 BLE 状态，手机端 ZRun 占用连接时无法刷新。
+`display-watch` 在正常空闲时按不短于 30 秒的周期读取 Codex，并向 Kimi Code 官方接口请求最新额度；BLE 重试不会把 Kimi 请求加速到 30 秒以内。Kimi 返回 `remaining` 时程序优先按 `remaining / limit` 计算百分比，只有缺少 `remaining` 时才使用 `used` 推算，避免因 5 小时窗口不含 `used` 而回退到旧缓存。只有设备写入成功后，它才把三项百分比的组合签名、时间和设备中的活动文件名保存到 `~/.codex/e01-display-sync-state.json`；任一百分比变化都会触发下一次写屏。Kimi 最近一次成功结果会脱敏缓存到 `~/.codex/e01-kimi-usage-cache.json`，临时断网或服务重启时可以继续显示旧值，超过 10 分钟会标为 `STALE DATA`。扫描或传输失败会按 5、15、30、60 秒的上限退避重试；长时间不变时每 5 分钟重新确认一次，避免设备重启后保留旧画面。E01 必须开机并处于 Mac 可连接的 BLE 状态，手机端 ZRun 占用连接时无法刷新。
 
 ## 新徽章首次同步
 
@@ -85,7 +85,7 @@ chmod +x scripts/install-display-watch.zsh
 
 首次完成 GATT 服务发现后，程序会在 `~/.codex/e01-known-device-id` 保存本机 CoreBluetooth UUID。此后 Mac 登录、后台服务重启或徽章再次广播时都会自动尝试连接，不需要重复运行安装命令。连续三次短连接失败后，程序会暂时放弃旧 UUID 并自动扫描；更换另一块徽章时执行 `./scripts/install-display-watch.zsh --reset-device`，旧 UUID 会先备份，再重新扫描新设备。
 
-这不是 HDMI 或 USB 外接屏。显示链路是“Codex/Kimi 额度 → 368×368 图片 → MJPEG AVI → BLE/RCSP 推送”，因此更新粒度是下一次 30 秒检查发现百分比变化后的同步，不是秒级推送，也不是逐帧镜像。当前只在一台 368×368 E01 上验证过协议和实际显示；自动重连仍需按设备固件逐台做一次断电验收。设备完全不广播时，任何 Mac 程序都无法主动连接，此时只需让徽章重新开机，不需要重装或重新执行同步命令。
+这不是 HDMI 或 USB 外接屏。当前静态显示链路是“Codex/Kimi 额度 → 368×368 图片 → JPEG → BLE/RCSP 推送”，因此更新粒度是下一次 30 秒检查发现百分比变化后的同步，不是秒级推送，也不是逐帧镜像。当前只在一台 368×368 E01 上验证过协议和实际显示；自动重连仍需按设备固件逐台做一次断电验收。设备完全不广播时，任何 Mac 程序都无法主动连接，此时只需让徽章重新开机，不需要重装或重新执行同步命令。
 
 ## 写入自己的程序/内容
 
@@ -109,6 +109,7 @@ chmod +x scripts/install-display-watch.zsh
 ## 参考来源
 
 - [Jieli-Tech/WeChat-Mini-Program-OTA](https://github.com/Jieli-Tech/WeChat-Mini-Program-OTA)（RCSP 认证资源和公开 SDK 语义）
+- [jumpingmushroom/e87_badge](https://github.com/jumpingmushroom/e87_badge)（ZRun 圆形 E-Badge 的 JPEG/AVI 上传实现与协议记录）
 - [Kimi Code Membership](https://www.kimi.com/code/docs/en/kimi-code/membership.html)（共享周额度与 5 小时滚动额度说明）
 - [MoonshotAI/kimi-code managed usage](https://github.com/MoonshotAI/kimi-code/blob/fa9865f2ee653133295992489554bb2db05a9db5/packages/oauth/src/managed-usage.ts)（官方额度接口、响应字段和超时行为）
 - 本仓库的 E01 普通数据/表盘协议代码来自对自有设备和自有 App 流量的 clean-room 观察；未复制厂商 App 源码。

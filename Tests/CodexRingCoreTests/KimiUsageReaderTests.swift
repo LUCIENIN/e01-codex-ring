@@ -79,6 +79,39 @@ final class KimiUsageReaderTests: XCTestCase {
         )
     }
 
+    func testParsesServerRemainingWhenFiveHourUsageOmitsUsed() throws {
+        let payload = Data(
+            """
+            {
+              "usage": {
+                "used": "9",
+                "limit": "100",
+                "remaining": "91",
+                "resetTime": "2026-08-23T16:49:26.558665Z"
+              },
+              "limits": [
+                {
+                  "window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
+                  "detail": {
+                    "limit": "100",
+                    "remaining": "100",
+                    "resetTime": "2026-08-20T12:49:26.558665Z"
+                  }
+                }
+              ]
+            }
+            """.utf8
+        )
+
+        let snapshot = try KimiUsagePayloadParser.parse(
+            payload,
+            observedAt: Date(timeIntervalSince1970: 1_787_200_000)
+        )
+
+        XCTAssertEqual(snapshot.weekly.remainingPercent, 91)
+        XCTAssertEqual(snapshot.fiveHour.remainingPercent, 100)
+    }
+
     func testRejectsPayloadWithoutBothRequiredQuotaWindows() throws {
         let payload = Data(#"{"usage":{"used":"9","limit":"100"},"limits":[]}"#.utf8)
 

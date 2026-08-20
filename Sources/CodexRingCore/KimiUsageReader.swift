@@ -243,13 +243,20 @@ enum KimiUsagePayloadParser {
     }
 
     private static func parseQuota(_ object: [String: Any]) -> KimiUsageQuota? {
-        guard let used = integer(object["used"]),
-              let limit = integer(object["limit"]),
+        guard let limit = integer(object["limit"]),
               limit > 0
         else {
             return nil
         }
-        let remaining = Int((Double(limit - used) * 100 / Double(limit)).rounded())
+        let remainingUnits: Int
+        if let serverRemaining = integer(object["remaining"]) {
+            remainingUnits = serverRemaining
+        } else if let used = integer(object["used"]) {
+            remainingUnits = limit - used
+        } else {
+            return nil
+        }
+        let remaining = Int((Double(remainingUnits) * 100 / Double(limit)).rounded())
         return KimiUsageQuota(
             remainingPercent: min(max(remaining, 0), 100),
             resetsAt: date(object["resetTime"])

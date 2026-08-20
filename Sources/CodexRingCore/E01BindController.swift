@@ -12,6 +12,8 @@ public struct E01BindResult: Equatable, Sendable {
     public let modelNumber: UInt16?
     public let rcspTargetInfoHex: String?
     public let committedMediaFileName: String?
+    public let mediaFiles: [E01FileBrowseEntry]
+    public let fileBrowseReachedEnd: Bool?
 
     public init(
         deviceName: String,
@@ -23,7 +25,9 @@ public struct E01BindResult: Equatable, Sendable {
         platform: UInt8? = nil,
         modelNumber: UInt16? = nil,
         rcspTargetInfoHex: String? = nil,
-        committedMediaFileName: String? = nil
+        committedMediaFileName: String? = nil,
+        mediaFiles: [E01FileBrowseEntry] = [],
+        fileBrowseReachedEnd: Bool? = nil
     ) {
         self.deviceName = deviceName
         self.responseLength = responseLength
@@ -35,6 +39,8 @@ public struct E01BindResult: Equatable, Sendable {
         self.modelNumber = modelNumber
         self.rcspTargetInfoHex = rcspTargetInfoHex
         self.committedMediaFileName = committedMediaFileName
+        self.mediaFiles = mediaFiles
+        self.fileBrowseReachedEnd = fileBrowseReachedEnd
     }
 }
 
@@ -65,6 +71,7 @@ public enum E01BindError: Error, Equatable, Sendable {
     case missingSDCard
     case invalidTransferRequest
     case transferFailed(reason: UInt8)
+    case unsafeManagedMedia(String)
     case timedOut(stage: String)
 }
 
@@ -132,6 +139,14 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
     private var lastReadRequest: E01RCSPTransferProtocol.ReadRequest?
     private var cleanupFileName: String?
     private var shouldFormatMedia = false
+    private var shouldBrowseMedia = false
+    private var fileBrowseData: [UInt8] = []
+    private var fileBrowsePathClusters: [UInt32] = [0]
+    private var fileBrowseOffset: UInt16 = 1
+    private var fileBrowseReadCount: UInt8 = 10
+    private var clusterDeletionEntries: [E01FileBrowseEntry] = []
+    private var pendingClusterDeletionParameters: [[UInt8]] = []
+    private var completedClusterDeletions = 0
     private var transferProgressStage = "waiting_for_transfer_requests"
     private var normalWriteQueue: [NormalWriteJob] = []
     private var activeNormalWrite: NormalWriteJob?
@@ -159,6 +174,7 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
     public func display(
         media: Data,
         fileName: String = "CODEX.AVI",
+        replacingFileName: String? = nil,
         request: E01BindRequest,
         timeout: TimeInterval
     ) async throws -> E01BindResult {
@@ -167,7 +183,8 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
             timeout: timeout,
             shouldProbeRCSP: true,
             mediaBytes: [UInt8](media),
-            mediaFileName: fileName
+            mediaFileName: fileName,
+            cleanupFileName: replacingFileName
         )
     }
 
@@ -196,6 +213,46 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
         )
     }
 
+    public func browseMediaFiles(
+        pathClusters: [UInt32] = [0],
+        offset: UInt16 = 1,
+        readCount: UInt8 = 50,
+        request: E01BindRequest,
+        timeout: TimeInterval
+    ) async throws -> E01BindResult {
+        try await start(
+            request: request,
+            timeout: timeout,
+            shouldProbeRCSP: true,
+            shouldBrowseMedia: true,
+            fileBrowsePathClusters: pathClusters,
+            fileBrowseOffset: offset,
+            fileBrowseReadCount: readCount
+        )
+    }
+
+    public func deleteManagedMediaFiles(
+        _ entries: [E01FileBrowseEntry],
+        request: E01BindRequest,
+        timeout: TimeInterval
+    ) async throws -> E01BindResult {
+        guard !entries.isEmpty,
+              entries.allSatisfy({
+                  $0.isFile
+                      && $0.deviceIndex == 2
+                      && E01ManagedMediaPolicy.isManagedFileName($0.name)
+              })
+        else {
+            throw E01BindError.unsafeManagedMedia(entries.first?.name ?? "empty")
+        }
+        return try await start(
+            request: request,
+            timeout: timeout,
+            shouldProbeRCSP: true,
+            clusterDeletionEntries: entries
+        )
+    }
+
     private func start(
         request: E01BindRequest,
         timeout: TimeInterval,
@@ -203,7 +260,12 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
         mediaBytes: [UInt8]? = nil,
         mediaFileName: String = "CODEX.AVI",
         cleanupFileName: String? = nil,
-        shouldFormatMedia: Bool = false
+        shouldFormatMedia: Bool = false,
+        shouldBrowseMedia: Bool = false,
+        fileBrowsePathClusters: [UInt32] = [0],
+        fileBrowseOffset: UInt16 = 1,
+        fileBrowseReadCount: UInt8 = 10,
+        clusterDeletionEntries: [E01FileBrowseEntry] = []
     ) async throws -> E01BindResult {
         guard (5...180).contains(timeout) else {
             throw E01BindError.invalidTimeout
@@ -244,6 +306,14 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                 self.lastReadRequest = nil
                 self.cleanupFileName = cleanupFileName
                 self.shouldFormatMedia = shouldFormatMedia
+                self.shouldBrowseMedia = shouldBrowseMedia
+                self.fileBrowseData = []
+                self.fileBrowsePathClusters = fileBrowsePathClusters.isEmpty ? [0] : fileBrowsePathClusters
+                self.fileBrowseOffset = fileBrowseOffset
+                self.fileBrowseReadCount = fileBrowseReadCount
+                self.clusterDeletionEntries = clusterDeletionEntries
+                self.pendingClusterDeletionParameters = []
+                self.completedClusterDeletions = 0
                 self.transferProgressStage = "waiting_for_transfer_requests"
                 self.normalWriteQueue = []
                 self.activeNormalWrite = nil
@@ -922,6 +992,22 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
     }
 
     private func startPostAuthenticationOperation() {
+        if !clusterDeletionEntries.isEmpty {
+            sendCommand(
+                opcode: 0x07,
+                parameter: E01RCSPTransferProtocol.getStorageParameter(),
+                stage: "waiting_for_storage_to_delete_clusters"
+            )
+            return
+        }
+        if shouldBrowseMedia {
+            sendCommand(
+                opcode: 0x07,
+                parameter: E01RCSPTransferProtocol.getStorageParameter(),
+                stage: "waiting_for_storage_to_browse"
+            )
+            return
+        }
         switch E01DisplayPreparation.nextStepAfterAuthentication(
             hasMedia: mediaBytes != nil,
             cleanupFileName: cleanupFileName,
@@ -935,11 +1021,12 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                 parameter: E01RCSPTransferProtocol.getStorageParameter(),
                 stage: shouldFormatMedia ? "waiting_for_storage_to_format" : "waiting_for_storage"
             )
-        case let .deleteFile(fileName):
+        case let .prepareDeletion(fileName):
+            traceTransfer("prepare_delete file=\(fileName)")
             sendCommand(
-                opcode: 0x23,
-                parameter: E01RCSPTransferProtocol.deleteByNameParameter(fileName),
-                stage: "waiting_for_generated_media_delete"
+                opcode: 0x21,
+                parameter: [0x01],
+                stage: "waiting_for_delete_prepare"
             )
         }
     }
@@ -995,8 +1082,18 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
             )
         case 0x23:
             guard cleanupFileName != nil, let badgeResult else { return }
+            traceTransfer("delete_complete file=\(cleanupFileName ?? "unknown")")
             self.cleanupFileName = nil
-            finish(with: .success(badgeResult))
+            switch E01DisplayPreparation.nextStepAfterDeletion(hasMedia: mediaBytes != nil) {
+            case .finishCleanup:
+                finish(with: .success(badgeResult))
+            case .queryStorage:
+                sendCommand(
+                    opcode: 0x07,
+                    parameter: E01RCSPTransferProtocol.getStorageParameter(),
+                    stage: "waiting_for_storage"
+                )
+            }
         case 0x07:
             traceTransfer("storage_info " + packet.parameter.map { String(format: "%02X", $0) }.joined())
             guard let handler = E01RCSPTransferProtocol.sdCardOneHandler(
@@ -1006,6 +1103,28 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                 return
             }
             storageHandler = handler
+            if !clusterDeletionEntries.isEmpty {
+                pendingClusterDeletionParameters = E01FileBrowseProtocol.clusterDeletionParameters(
+                    deviceHandler: handler,
+                    entries: clusterDeletionEntries
+                )
+                sendNextClusterDeletion()
+                return
+            }
+            if shouldBrowseMedia {
+                fileBrowseData = []
+                sendCommand(
+                    opcode: 0x0C,
+                    parameter: E01FileBrowseProtocol.browseParameter(
+                        deviceHandler: handler,
+                        pathClusters: fileBrowsePathClusters,
+                        offset: fileBrowseOffset,
+                        readCount: fileBrowseReadCount
+                    ),
+                    stage: "waiting_for_file_browse"
+                )
+                return
+            }
             if shouldFormatMedia {
                 sendCommand(
                     opcode: 0x22,
@@ -1020,6 +1139,14 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                 stage: "waiting_for_transfer_prepare"
             )
         case 0x21:
+            if stage == "waiting_for_delete_prepare", let cleanupFileName {
+                sendCommand(
+                    opcode: 0x23,
+                    parameter: E01RCSPTransferProtocol.deleteByNameParameter(cleanupFileName),
+                    stage: "waiting_for_generated_media_delete"
+                )
+                return
+            }
             guard let storageHandler else {
                 finish(with: .failure(.missingSDCard))
                 return
@@ -1046,6 +1173,17 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
                 temporaryPath: "CODEXRNG.tmp"
             )
             sendCommand(opcode: 0x1B, parameter: parameter, stage: "waiting_for_transfer_start")
+        case 0x0C:
+            traceTransfer("file_browse_started total=" + packet.parameter.map(String.init).joined())
+        case 0x1F:
+            completedClusterDeletions += 1
+            traceTransfer("cluster_delete_complete count=\(completedClusterDeletions)")
+            if pendingClusterDeletionParameters.isEmpty {
+                guard let badgeResult else { return }
+                finish(with: .success(badgeResult))
+            } else {
+                sendNextClusterDeletion()
+            }
         case 0x1B:
             if packet.parameter.count >= 2 {
                 transferPacketSize = (Int(packet.parameter[0]) << 8) | Int(packet.parameter[1])
@@ -1064,6 +1202,43 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
 
     private func handleRCSPCommand(_ packet: E01RCSPFrame.Packet) {
         switch packet.opcode {
+        case 0x01:
+            guard shouldBrowseMedia, packet.parameter.first == 0x0C else { break }
+            fileBrowseData.append(contentsOf: packet.parameter.dropFirst())
+            traceTransfer("file_browse_data bytes=\(fileBrowseData.count)")
+        case 0x0D:
+            guard shouldBrowseMedia, let badgeResult else { break }
+            let reason = packet.parameter.first ?? 0xFF
+            traceTransfer("file_browse_stop reason=\(reason)")
+            do {
+                let entries = try E01FileBrowseProtocol.parseEntries(fileBrowseData)
+                try writeRCSP(
+                    E01RCSPFrame.response(
+                        opcode: packet.opcode,
+                        serialNumber: packet.serialNumber,
+                        status: 0
+                    ),
+                    stage: "acknowledging_file_browse_stop"
+                )
+                let browseResult = E01BindResult(
+                    deviceName: badgeResult.deviceName,
+                    responseLength: badgeResult.responseLength,
+                    displaySize: badgeResult.displaySize,
+                    memoryBytes: badgeResult.memoryBytes,
+                    protocolVersion: badgeResult.protocolVersion,
+                    firmwareVersion: badgeResult.firmwareVersion,
+                    platform: badgeResult.platform,
+                    modelNumber: badgeResult.modelNumber,
+                    rcspTargetInfoHex: badgeResult.rcspTargetInfoHex,
+                    mediaFiles: entries,
+                    fileBrowseReachedEnd: reason == 1
+                )
+                queue.asyncAfter(deadline: .now() + .milliseconds(150)) { [weak self] in
+                    self?.finish(with: .success(browseResult))
+                }
+            } catch {
+                finish(with: .failure(.invalidTransferRequest))
+            }
         case 0x1D:
             guard let request = E01RCSPTransferProtocol.readRequest(from: packet.parameter),
                   let mediaBytes,
@@ -1192,6 +1367,18 @@ public final class E01BindController: NSObject, CBCentralManagerDelegate, CBPeri
         } catch {
             finish(with: .failure(.writeFailed))
         }
+    }
+
+    private func sendNextClusterDeletion() {
+        guard !pendingClusterDeletionParameters.isEmpty else { return }
+        let parameter = pendingClusterDeletionParameters.removeFirst()
+        let cluster = parameter.suffix(4).map { String(format: "%02X", $0) }.joined()
+        traceTransfer("cluster_delete cluster=\(cluster)")
+        sendCommand(
+            opcode: 0x1F,
+            parameter: parameter,
+            stage: "waiting_for_cluster_delete"
+        )
     }
 
     private func nextRCSPSerialNumber() -> UInt8 {

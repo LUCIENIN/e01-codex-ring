@@ -76,6 +76,17 @@ final class RingCommandParserTests: XCTestCase {
         XCTAssertEqual(command.options.scanTimeout, 20)
     }
 
+    func testBrowseMediaIsAReadOnlyFileInspectionCommand() throws {
+        let command = try RingCommandParser.parse(
+            arguments: ["browse-media", "--timeout", "20"],
+            homeDirectory: URL(filePath: "/Users/example"),
+            workingDirectory: URL(filePath: "/tmp/project")
+        )
+
+        XCTAssertEqual(command.kind, .browseMedia)
+        XCTAssertEqual(command.options.scanTimeout, 20)
+    }
+
     func testCleanupIsAnExplicitGeneratedMediaCommand() throws {
         let command = try RingCommandParser.parse(
             arguments: ["cleanup", "--timeout", "20"],

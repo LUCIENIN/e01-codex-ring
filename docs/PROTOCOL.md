@@ -49,6 +49,8 @@ display_sync_unchanged codex_remaining=24 kimi_weekly_remaining=91 kimi_five_hou
 
 This proves transfer completion, old-media cleanup and an unchanged follow-up cycle. The latest redesigned card still needs a separate visual readback; protocol completion alone is not documented as visual acceptance.
 
+On 2026-08-20 the static-card encoder was changed from a repeated-frame AVI to a single JPEG after comparison with the ZRun-compatible `e87_badge` implementation. Offline verification produced a 13,067-byte JFIF JPEG with a valid end marker, 368×368 dimensions and `yuvj420p` pixel format. The device was not advertising and the saved connection timed out during this run, so this JPEG path is not yet recorded here as a live-device or visual success.
+
 The normal-service `C0` video-dial path remains implemented for protocol study, but this firmware rejects its start header before issuing `C1`. An older attempt ended with `C5 reason 5`; that reason's general meaning has not been decoded. This is a historical result for an unused alternate path, not the current `display` blocker: the CLI now uses the verified RCSP media-transfer path.
 
 ## Not in scope

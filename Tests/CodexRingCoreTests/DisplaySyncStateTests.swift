@@ -89,19 +89,31 @@ final class DisplaySyncStateTests: XCTestCase {
         var state = DisplaySyncState()
         let now = Date(timeIntervalSince1970: 1_000)
 
-        XCTAssertEqual(state.nextPreferredMediaFileName, "CODEXA.AVI")
+        XCTAssertEqual(state.nextPreferredMediaFileName, "CODEXA.JPG")
         state.recordSuccessfulPush(
             remainingPercent: 32,
             at: now,
             activeMediaFileName: "CODEXA.AVI"
         )
-        XCTAssertEqual(state.nextPreferredMediaFileName, "CODEXB.AVI")
+        XCTAssertEqual(state.nextPreferredMediaFileName, "CODEXB.JPG")
         state.recordSuccessfulPush(
             remainingPercent: 31,
             at: now.addingTimeInterval(30),
             activeMediaFileName: "CODEXB001.AVI"
         )
-        XCTAssertEqual(state.nextPreferredMediaFileName, "CODEXA.AVI")
+        XCTAssertEqual(state.nextPreferredMediaFileName, "CODEXA.JPG")
+    }
+
+    func testMediaUpdateReplacesTheActiveFileBeforeUploadingTheAlternateName() {
+        var state = DisplaySyncState()
+        state.recordSuccessfulPush(
+            contentSignature: "codex:24|kimi-week:91|kimi-5h:82",
+            at: Date(timeIntervalSince1970: 1_000),
+            activeMediaFileName: "CODEXB003.AVI"
+        )
+
+        XCTAssertEqual(state.nextMediaUpdate.fileNameToReplace, "CODEXB003.AVI")
+        XCTAssertEqual(state.nextMediaUpdate.destinationFileName, "CODEXA.JPG")
     }
 
     func testFailedConnectionUsesBoundedBackoff() {

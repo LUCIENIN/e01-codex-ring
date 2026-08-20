@@ -31,14 +31,21 @@ final class E01DisplayPreparationTests: XCTestCase {
         )
     }
 
-    func testCleanupDeletesFileImmediatelyAfterAuthentication() {
+    func testCleanupPreparesTheDeletionEnvironmentAfterAuthentication() {
         XCTAssertEqual(
             E01DisplayPreparation.nextStepAfterAuthentication(
                 hasMedia: false,
                 cleanupFileName: "CODEXA.AVI",
                 shouldFormatMedia: false
             ),
-            .deleteFile("CODEXA.AVI")
+            .prepareDeletion("CODEXA.AVI")
+        )
+    }
+
+    func testReplacementContinuesToStorageAfterDeletingTheActiveFile() {
+        XCTAssertEqual(
+            E01DisplayPreparation.nextStepAfterDeletion(hasMedia: true),
+            .queryStorage
         )
     }
 
