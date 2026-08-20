@@ -15,6 +15,7 @@ struct CodexRingApp {
         case ffmpegUnavailable
         case ffmpegFailed(Int32)
         case imageDecodingFailed
+        case incompleteMediaBrowse(pendingWorkItems: Int)
     }
 
     static func main() async {
@@ -361,6 +362,9 @@ struct CodexRingApp {
             if result.fileBrowseReachedEnd == false, !result.mediaFiles.isEmpty {
                 pending.append((clusters, path, offset + UInt16(result.mediaFiles.count)))
             }
+        }
+        guard pending.isEmpty else {
+            throw AppError.incompleteMediaBrowse(pendingWorkItems: pending.count)
         }
         return files
     }
